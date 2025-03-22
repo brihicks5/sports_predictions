@@ -1,2 +1,2 @@
 # sports_predictions
-models for predicting sports outcomes
+models for predicting sports outcomes.
