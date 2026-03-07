@@ -39,13 +39,21 @@ def main():
         args.season, neutral_site=args.neutral
     )
 
+    home = result['home_team']
+    away = result['away_team']
+
     print(f"\n{'='*50}")
-    print(f"  {result['home_team']} vs {result['away_team']}")
+    print(f"  {home} vs {away}")
     if args.neutral:
         print(f"  (Neutral site)")
     print(f"{'='*50}")
-    print(f"  {result['home_team']}: {result['home_win_prob']*100:.1f}%")
-    print(f"  {result['away_team']}: {result['away_win_prob']*100:.1f}%")
+    print(f"\n  Win probability:")
+    print(f"    {home}: {result['home_win_prob']*100:.1f}%")
+    print(f"    {away}: {result['away_win_prob']*100:.1f}%")
+    print(f"\n  Predicted score:")
+    print(f"    {home} {result['predicted_home_score']} - "
+          f"{away} {result['predicted_away_score']}")
+    print(f"    Margin: {abs(result['predicted_margin']):.1f} pts")
     print(f"\n  Predicted winner: {result['predicted_winner']}")
     print(f"{'='*50}")
 

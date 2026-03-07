@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.model_selection import cross_val_score
 
 from sports_predictions.db import get_db, DATA_DIR
@@ -45,7 +45,10 @@ def build_training_data(sport: str, seasons: list = None):
     """Build feature matrix from historical games.
 
     For each game, features are the difference between home team stats
-    and away team stats (home - away). Target is 1 if home team won.
+    and away team stats (home - away).
+
+    Returns X, y_win (1 if home won), y_margin (home - away score),
+    y_total (total points), and feature_stats.
     """
     conn = get_db(sport)
 
@@ -70,7 +73,9 @@ def build_training_data(sport: str, seasons: list = None):
         )
 
     X_rows = []
-    y_rows = []
+    y_win_rows = []
+    y_margin_rows = []
+    y_total_rows = []
 
     for season in seasons:
         games = conn.execute("""
@@ -101,61 +106,94 @@ def build_training_data(sport: str, seasons: list = None):
             row["neutral_site"] = game["neutral_site"]
 
             X_rows.append(row)
-            y_rows.append(1 if game["home_score"] > game["away_score"] else 0)
+            y_win_rows.append(
+                1 if game["home_score"] > game["away_score"] else 0
+            )
+            y_margin_rows.append(game["home_score"] - game["away_score"])
+            y_total_rows.append(game["home_score"] + game["away_score"])
 
     conn.close()
 
     X = pd.DataFrame(X_rows)
-    y = np.array(y_rows)
-    return X, y, feature_stats
+    y_win = np.array(y_win_rows)
+    y_margin = np.array(y_margin_rows)
+    y_total = np.array(y_total_rows)
+    return X, y_win, y_margin, y_total, feature_stats
 
 
 def train_model(sport: str, seasons: list = None):
-    """Train a prediction model and save it to disk.
+    """Train prediction models and save to disk.
 
-    Returns the trained model and cross-validation accuracy.
+    Trains three models:
+    - Win classifier (who wins)
+    - Margin regressor (by how much)
+    - Total regressor (combined score)
+
+    Returns the win model and cross-validation accuracy.
     """
-    X, y, feature_stats = build_training_data(sport, seasons)
+    X, y_win, y_margin, y_total, feature_stats = build_training_data(
+        sport, seasons
+    )
     print(f"Training on {len(X)} games with features: {feature_stats}")
 
-    model = GradientBoostingClassifier(
-        n_estimators=200,
-        max_depth=4,
-        learning_rate=0.1,
-        random_state=42,
+    # Win probability classifier
+    win_model = GradientBoostingClassifier(
+        n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
     )
+    win_scores = cross_val_score(win_model, X, y_win, cv=5, scoring="accuracy")
+    print(f"Win classifier accuracy: {win_scores.mean():.4f} "
+          f"(+/- {win_scores.std():.4f})")
+    win_model.fit(X, y_win)
 
-    # Cross-validate
-    scores = cross_val_score(model, X, y, cv=5, scoring="accuracy")
-    print(f"Cross-validation accuracy: {scores.mean():.4f} (+/- {scores.std():.4f})")
+    # Score margin regressor (home - away)
+    margin_model = GradientBoostingRegressor(
+        n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
+    )
+    margin_scores = cross_val_score(
+        margin_model, X, y_margin, cv=5, scoring="neg_mean_absolute_error"
+    )
+    print(f"Margin MAE: {-margin_scores.mean():.2f} pts "
+          f"(+/- {margin_scores.std():.2f})")
+    margin_model.fit(X, y_margin)
 
-    # Train on full data
-    model.fit(X, y)
+    # Total points regressor
+    total_model = GradientBoostingRegressor(
+        n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
+    )
+    total_scores = cross_val_score(
+        total_model, X, y_total, cv=5, scoring="neg_mean_absolute_error"
+    )
+    print(f"Total MAE: {-total_scores.mean():.2f} pts "
+          f"(+/- {total_scores.std():.2f})")
+    total_model.fit(X, y_total)
 
-    # Save model and metadata
+    # Save all models
     model_path = DATA_DIR / f"{sport}_model.pkl"
     with open(model_path, "wb") as f:
         pickle.dump({
-            "model": model,
+            "win_model": win_model,
+            "margin_model": margin_model,
+            "total_model": total_model,
             "feature_stats": feature_stats,
             "feature_columns": list(X.columns),
         }, f)
-    print(f"Model saved to {model_path}")
+    print(f"Models saved to {model_path}")
 
-    # Feature importance
-    print("\nFeature importance:")
-    for name, imp in sorted(zip(X.columns, model.feature_importances_),
+    # Feature importance (from win model)
+    print("\nFeature importance (win model):")
+    for name, imp in sorted(zip(X.columns, win_model.feature_importances_),
                             key=lambda x: -x[1]):
         print(f"  {name}: {imp:.4f}")
 
-    return model, scores.mean()
+    return win_model, win_scores.mean()
 
 
 def predict_game(sport: str, home_team: str, away_team: str,
                  season: int, neutral_site: bool = False) -> dict:
     """Predict the outcome of a game.
 
-    Returns dict with home_win_prob, away_win_prob, and predicted_winner.
+    Returns dict with win probabilities, predicted winner, predicted margin,
+    and predicted scores for each team.
     """
     model_path = DATA_DIR / f"{sport}_model.pkl"
     if not model_path.exists():
@@ -166,7 +204,9 @@ def predict_game(sport: str, home_team: str, away_team: str,
     with open(model_path, "rb") as f:
         saved = pickle.load(f)
 
-    model = saved["model"]
+    win_model = saved["win_model"]
+    margin_model = saved["margin_model"]
+    total_model = saved["total_model"]
     feature_stats = saved["feature_stats"]
     feature_columns = saved["feature_columns"]
 
@@ -196,13 +236,26 @@ def predict_game(sport: str, home_team: str, away_team: str,
     row["neutral_site"] = int(neutral_site)
 
     X = pd.DataFrame([row])[feature_columns]
-    prob = model.predict_proba(X)[0]
 
+    # Win probability
+    prob = win_model.predict_proba(X)[0]
     home_win_prob = prob[1]
+
+    # Predicted margin (home - away) and total
+    pred_margin = margin_model.predict(X)[0]
+    pred_total = total_model.predict(X)[0]
+
+    # Derive individual scores: total = home + away, margin = home - away
+    pred_home_score = (pred_total + pred_margin) / 2
+    pred_away_score = (pred_total - pred_margin) / 2
+
     return {
         "home_team": home_team,
         "away_team": away_team,
         "home_win_prob": round(home_win_prob, 4),
         "away_win_prob": round(1 - home_win_prob, 4),
         "predicted_winner": home_team if home_win_prob > 0.5 else away_team,
+        "predicted_margin": round(pred_margin, 1),
+        "predicted_home_score": round(pred_home_score),
+        "predicted_away_score": round(pred_away_score),
     }
