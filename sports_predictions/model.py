@@ -15,18 +15,9 @@ from sklearn.model_selection import cross_val_score
 
 from sports_predictions.db import get_db, DATA_DIR
 
-# Stats to use as features, in priority order.
-# The model uses whichever of these are available in the database.
-FEATURE_STATS = [
-    "adj_efficiency_margin",
-    "adj_offensive_efficiency",
-    "adj_defensive_efficiency",
-    "adj_tempo",
-    "win_pct",
-    "avg_margin",
-    "avg_points_for",
-    "avg_points_against",
-]
+# Stats to exclude from features (e.g. metadata that shouldn't be model inputs).
+# Everything else in team_stats is used automatically.
+EXCLUDED_STATS = {"games_played"}
 
 
 def _get_team_features(conn, team_id: int, season: int,
@@ -58,12 +49,14 @@ def build_training_data(sport: str, seasons: list = None):
         ).fetchall()
         seasons = [r["season"] for r in rows]
 
-    # Figure out which stats are available
+    # Use all stats in the database except excluded ones
     available = conn.execute(
-        "SELECT DISTINCT stat_name FROM team_stats"
+        "SELECT DISTINCT stat_name FROM team_stats ORDER BY stat_name"
     ).fetchall()
-    available_stats = [r["stat_name"] for r in available]
-    feature_stats = [s for s in FEATURE_STATS if s in available_stats]
+    feature_stats = [
+        r["stat_name"] for r in available
+        if r["stat_name"] not in EXCLUDED_STATS
+    ]
 
     if not feature_stats:
         conn.close()
