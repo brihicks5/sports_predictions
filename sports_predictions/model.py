@@ -13,7 +13,7 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.model_selection import cross_val_score
 
-from sports_predictions.db import get_db, DATA_DIR
+from sports_predictions.db import get_db, resolve_team, DATA_DIR
 
 # Stats to exclude from features (e.g. metadata that shouldn't be model inputs).
 # Everything else in team_stats is used automatically.
@@ -205,22 +205,34 @@ def predict_game(sport: str, home_team: str, away_team: str,
 
     conn = get_db(sport)
 
-    home_row = conn.execute(
-        "SELECT id FROM teams WHERE name = ?", (home_team,)
-    ).fetchone()
-    away_row = conn.execute(
-        "SELECT id FROM teams WHERE name = ?", (away_team,)
-    ).fetchone()
+    home_id = resolve_team(conn, home_team)
+    away_id = resolve_team(conn, away_team)
 
-    if not home_row:
+    if not home_id:
+        suggestions = conn.execute(
+            "SELECT alias FROM team_aliases WHERE alias LIKE ?",
+            (f"%{home_team}%",)
+        ).fetchall()
         conn.close()
-        raise ValueError(f"Team not found: {home_team}")
-    if not away_row:
+        msg = f"Team not found: {home_team}"
+        if suggestions:
+            msg += (". Did you mean: "
+                    + ", ".join(s["alias"] for s in suggestions[:5]) + "?")
+        raise ValueError(msg)
+    if not away_id:
+        suggestions = conn.execute(
+            "SELECT alias FROM team_aliases WHERE alias LIKE ?",
+            (f"%{away_team}%",)
+        ).fetchall()
         conn.close()
-        raise ValueError(f"Team not found: {away_team}")
+        msg = f"Team not found: {away_team}"
+        if suggestions:
+            msg += (". Did you mean: "
+                    + ", ".join(s["alias"] for s in suggestions[:5]) + "?")
+        raise ValueError(msg)
 
-    home_feats = _get_team_features(conn, home_row["id"], season, feature_stats)
-    away_feats = _get_team_features(conn, away_row["id"], season, feature_stats)
+    home_feats = _get_team_features(conn, home_id, season, feature_stats)
+    away_feats = _get_team_features(conn, away_id, season, feature_stats)
     conn.close()
 
     row = {}

@@ -53,31 +53,93 @@ def _ensure_schema(conn: sqlite3.Connection):
             UNIQUE(team_id, season, stat_name)
         );
 
+        CREATE TABLE IF NOT EXISTS team_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_id INTEGER NOT NULL REFERENCES teams(id),
+            alias TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
         CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
         CREATE INDEX IF NOT EXISTS idx_team_stats_lookup
             ON team_stats(team_id, season, stat_name);
+        CREATE INDEX IF NOT EXISTS idx_team_aliases_alias
+            ON team_aliases(alias);
+        CREATE INDEX IF NOT EXISTS idx_team_aliases_team
+            ON team_aliases(team_id);
     """)
 
 
-def get_or_create_team(conn: sqlite3.Connection, name: str,
-                       conference: str = None) -> int:
-    """Get existing team id or create a new team. Returns the team id."""
+def resolve_team(conn: sqlite3.Connection, name: str) -> int | None:
+    """Look up a team by alias or canonical name. Returns team id or None."""
+    row = conn.execute(
+        "SELECT team_id FROM team_aliases WHERE alias = ?", (name,)
+    ).fetchone()
+    if row:
+        return row["team_id"]
     row = conn.execute(
         "SELECT id FROM teams WHERE name = ?", (name,)
     ).fetchone()
     if row:
+        return row["id"]
+    return None
+
+
+def add_team_alias(conn: sqlite3.Connection, team_id: int,
+                   alias: str, source: str):
+    """Add an alias for a team. Ignores if alias already exists."""
+    conn.execute(
+        "INSERT OR IGNORE INTO team_aliases (team_id, alias, source) "
+        "VALUES (?, ?, ?)",
+        (team_id, alias, source)
+    )
+
+
+def get_or_create_team(conn: sqlite3.Connection, name: str,
+                       conference: str = None, source: str = None) -> int:
+    """Get existing team id (by alias or name) or create a new team.
+
+    Returns the team id.
+    """
+    # Check aliases first
+    row = conn.execute(
+        "SELECT team_id FROM team_aliases WHERE alias = ?", (name,)
+    ).fetchone()
+    if row:
+        team_id = row["team_id"]
         if conference:
             conn.execute(
                 "UPDATE teams SET conference = ? WHERE id = ?",
-                (conference, row["id"])
+                (conference, team_id)
             )
-        return row["id"]
+        return team_id
+
+    # Fall back to canonical name lookup
+    row = conn.execute(
+        "SELECT id FROM teams WHERE name = ?", (name,)
+    ).fetchone()
+    if row:
+        team_id = row["id"]
+        if conference:
+            conn.execute(
+                "UPDATE teams SET conference = ? WHERE id = ?",
+                (conference, team_id)
+            )
+        # Backfill alias
+        add_team_alias(conn, team_id, name, source or "canonical")
+        return team_id
+
+    # Create new team + aliases
     cursor = conn.execute(
         "INSERT INTO teams (name, conference) VALUES (?, ?)",
         (name, conference)
     )
-    return cursor.lastrowid
+    team_id = cursor.lastrowid
+    add_team_alias(conn, team_id, name, "canonical")
+    if source and source != "canonical":
+        add_team_alias(conn, team_id, name, source)
+    return team_id
 
 
 def upsert_game(conn: sqlite3.Connection, season: int, date: str,

@@ -10,14 +10,14 @@ Usage:
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sports_predictions.scrapers.ncaa_basketball import (
-    compute_season_stats, fetch_kenpom_ratings
+    compute_season_stats, fetch_espn_games, fetch_kenpom_ratings
 )
 from sports_predictions.model import train_model
 
@@ -37,12 +37,24 @@ def main():
         "--skip-kenpom", action="store_true",
         help="Skip KenPom data fetch"
     )
+    parser.add_argument(
+        "--skip-espn", action="store_true",
+        help="Skip ESPN game fetch"
+    )
     args = parser.parse_args()
 
     print(f"=== Updating NCAA Basketball data for {args.season} ===")
     print(f"Timestamp: {datetime.now().isoformat()}")
 
-    # Step 1: Compute basic stats from game results already in the DB
+    # Step 1: Fetch recent game results from ESPN
+    if not args.skip_espn:
+        print("\n--- Fetching ESPN games ---")
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        fetch_espn_games(yesterday)
+        fetch_espn_games(today)
+
+    # Step 2: Compute basic stats from game results already in the DB
     print("\n--- Computing season stats ---")
     compute_season_stats(args.season)
 

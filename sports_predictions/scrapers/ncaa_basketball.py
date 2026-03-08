@@ -2,8 +2,8 @@
 
 Supports:
 1. Kaggle March Machine Learning Mania CSV files (historical bulk import)
-2. KenPom scraping for advanced metrics (adjusted efficiency, tempo, etc.)
-3. sportsipy for in-season game results
+2. KenPom API for advanced metrics (adjusted efficiency, tempo, etc.)
+3. ESPN API for current-season game results
 """
 
 import csv
@@ -48,8 +48,8 @@ def import_kaggle_games(csv_path: str):
             w_name = team_names.get(w_team_raw, f"Team_{w_team_raw}")
             l_name = team_names.get(l_team_raw, f"Team_{l_team_raw}")
 
-            w_id = get_or_create_team(conn, w_name)
-            l_id = get_or_create_team(conn, l_name)
+            w_id = get_or_create_team(conn, w_name, source="kaggle")
+            l_id = get_or_create_team(conn, l_name, source="kaggle")
 
             # WLoc: H = winner was home, A = winner was away, N = neutral
             wloc = row.get("WLoc", "N")
@@ -102,8 +102,8 @@ def import_kaggle_tourney(csv_path: str):
             w_name = team_names.get(row["WTeamID"], f"Team_{row['WTeamID']}")
             l_name = team_names.get(row["LTeamID"], f"Team_{row['LTeamID']}")
 
-            w_id = get_or_create_team(conn, w_name)
-            l_id = get_or_create_team(conn, l_name)
+            w_id = get_or_create_team(conn, w_name, source="kaggle")
+            l_id = get_or_create_team(conn, l_name, source="kaggle")
 
             wloc = row.get("WLoc", "N")
             if wloc == "H":
@@ -194,7 +194,8 @@ def fetch_kenpom_ratings(season: int):
             continue
 
         conf = entry.get("ConfShort")
-        team_id = get_or_create_team(conn, team_name, conference=conf)
+        team_id = get_or_create_team(conn, team_name, conference=conf,
+                                         source="kenpom")
 
         for api_field, stat_name in KENPOM_RATINGS_FIELDS.items():
             value = entry.get(api_field)
@@ -206,6 +207,105 @@ def fetch_kenpom_ratings(season: int):
     conn.commit()
     conn.close()
     print(f"Imported KenPom ratings for {count} teams (season {season})")
+
+
+ESPN_SCOREBOARD_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball"
+    "/mens-college-basketball/scoreboard"
+)
+
+
+def _date_to_season(date_str: str) -> int:
+    """Convert a date string (YYYY-MM-DD) to NCAA season year.
+
+    NCAA season spans Nov-Apr. Games from Nov-Dec belong to the next
+    calendar year's season (e.g., Nov 2025 = season 2026).
+    """
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    if dt.month >= 11:
+        return dt.year + 1
+    return dt.year
+
+
+def fetch_espn_games(date_str: str):
+    """Fetch completed game results from ESPN for a given date.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format.
+
+    Returns the number of games imported.
+    """
+    espn_date = date_str.replace("-", "")
+    resp = requests.get(ESPN_SCOREBOARD_URL,
+                        params={"dates": espn_date, "limit": 200})
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"ESPN API error {resp.status_code}: {resp.text}"
+        )
+
+    data = resp.json()
+    events = data.get("events", [])
+    season = _date_to_season(date_str)
+
+    conn = get_db(SPORT)
+    count = 0
+    unmatched = []
+
+    for event in events:
+        comp = event["competitions"][0]
+
+        # Skip incomplete games
+        if not comp["status"]["type"].get("completed", False):
+            continue
+
+        competitors = comp["competitors"]
+        home = next(c for c in competitors if c["homeAway"] == "home")
+        away = next(c for c in competitors if c["homeAway"] == "away")
+
+        home_name = home["team"]["shortDisplayName"]
+        away_name = away["team"]["shortDisplayName"]
+
+        # Check if teams exist before creating — track truly new ones
+        home_is_new = (conn.execute(
+            "SELECT team_id FROM team_aliases WHERE alias = ?",
+            (home_name,)
+        ).fetchone() is None and conn.execute(
+            "SELECT id FROM teams WHERE name = ?", (home_name,)
+        ).fetchone() is None)
+
+        away_is_new = (conn.execute(
+            "SELECT team_id FROM team_aliases WHERE alias = ?",
+            (away_name,)
+        ).fetchone() is None and conn.execute(
+            "SELECT id FROM teams WHERE name = ?", (away_name,)
+        ).fetchone() is None)
+
+        home_id = get_or_create_team(conn, home_name, source="espn")
+        away_id = get_or_create_team(conn, away_name, source="espn")
+
+        if home_is_new:
+            unmatched.append(home_name)
+        if away_is_new:
+            unmatched.append(away_name)
+
+        home_score = int(home["score"])
+        away_score = int(away["score"])
+        neutral = comp.get("neutralSite", False)
+
+        upsert_game(conn, season, date_str, home_id, away_id,
+                     home_score, away_score, neutral_site=neutral)
+        count += 1
+
+    conn.commit()
+    conn.close()
+
+    if unmatched:
+        unique = sorted(set(unmatched))
+        print(f"WARNING: {len(unique)} unmatched ESPN teams "
+              f"(may need alias mapping): {unique}")
+
+    print(f"Imported {count} ESPN games for {date_str}")
+    return count
 
 
 def compute_season_stats(season: int):
