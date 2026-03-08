@@ -237,7 +237,8 @@ def fetch_espn_games(date_str: str):
     """
     espn_date = date_str.replace("-", "")
     resp = requests.get(ESPN_SCOREBOARD_URL,
-                        params={"dates": espn_date, "limit": 200})
+                        params={"dates": espn_date, "limit": 200,
+                                "groups": 50})
     if resp.status_code != 200:
         raise RuntimeError(
             f"ESPN API error {resp.status_code}: {resp.text}"
