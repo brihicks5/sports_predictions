@@ -7,12 +7,11 @@ Supports:
 """
 
 import csv
-import re
+import os
 from datetime import datetime
 from pathlib import Path
 
 import requests
-from bs4 import BeautifulSoup
 
 from sports_predictions.db import (
     get_db, get_or_create_team, upsert_game, upsert_team_stat
@@ -130,82 +129,83 @@ def import_kaggle_tourney(csv_path: str):
     print(f"Imported {count} tournament games from Kaggle CSV")
 
 
-def scrape_kenpom(season: int, username: str = None, password: str = None):
-    """Scrape KenPom ratings for a given season.
+def _get_kenpom_api_token():
+    """Load KenPom API token from .env file."""
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+    token = os.environ.get("KENPOM_API_TOKEN")
+    if not token:
+        raise ValueError(
+            "KENPOM_API_TOKEN not found. Add it to .env file. "
+            "See .env.example for format."
+        )
+    return token
 
-    KenPom requires a subscription for most data. If credentials are provided,
-    logs in first. Otherwise attempts to scrape the free summary page.
 
-    Stores these stats per team:
-    - adj_efficiency_margin: adjusted efficiency margin
-    - adj_offensive_efficiency: adjusted offensive efficiency
-    - adj_defensive_efficiency: adjusted defensive efficiency
-    - adj_tempo: adjusted tempo
-    """
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
-    })
-
-    if username and password:
-        login_url = "https://kenpom.com/handlers/login_handler.php"
-        session.post(login_url, data={
-            "email": username,
-            "password": password,
-        })
-
-    url = f"https://kenpom.com/index.php?y={season}"
-    resp = session.get(url)
+def _kenpom_api_request(endpoint: str, params: dict) -> list:
+    """Make an authenticated request to the KenPom API."""
+    token = _get_kenpom_api_token()
+    params["endpoint"] = endpoint
+    resp = requests.get(
+        "https://kenpom.com/api.php",
+        params=params,
+        headers={"Authorization": f"Bearer {token}"},
+    )
     if resp.status_code != 200:
-        print(f"Failed to fetch KenPom data: {resp.status_code}")
-        return
+        raise RuntimeError(
+            f"KenPom API error {resp.status_code}: {resp.text}"
+        )
+    return resp.json()
 
-    soup = BeautifulSoup(resp.text, "lxml")
-    table = soup.find("table", {"id": "ratings-table"})
-    if not table:
-        print("Could not find ratings table — may need KenPom subscription")
-        return
+
+# Mapping from KenPom API field names to our stat names.
+# Only float fields that are useful as model features.
+KENPOM_RATINGS_FIELDS = {
+    "AdjEM": "adj_efficiency_margin",
+    "AdjOE": "adj_offensive_efficiency",
+    "AdjDE": "adj_defensive_efficiency",
+    "AdjTempo": "adj_tempo",
+    "Pythag": "pythag",
+    "Luck": "luck",
+    "SOS": "sos",
+    "SOSO": "sos_offense",
+    "SOSD": "sos_defense",
+    "NCSOS": "nc_sos",
+    "OE": "offensive_efficiency",
+    "DE": "defensive_efficiency",
+    "Tempo": "tempo",
+}
+
+
+def fetch_kenpom_ratings(season: int):
+    """Fetch team ratings from the KenPom API and store in the database.
+
+    Uses the ratings endpoint to get adjusted efficiency, tempo,
+    strength of schedule, and other advanced metrics.
+    """
+    data = _kenpom_api_request("ratings", {"y": season})
 
     conn = get_db(SPORT)
     count = 0
 
-    tbody = table.find("tbody")
-    if not tbody:
-        print("No table body found")
-        conn.close()
-        return
-
-    for row in tbody.find_all("tr"):
-        cells = row.find_all("td")
-        if len(cells) < 8:
+    for entry in data:
+        team_name = entry.get("TeamName")
+        if not team_name:
             continue
 
-        # Column layout: Rank, Team, Conf, W-L, AdjEM, AdjO, AdjD, AdjT
-        team_cell = cells[1]
-        team_name = team_cell.get_text(strip=True)
-        # Remove seed numbers that sometimes appear
-        team_name = re.sub(r'\s*\d+$', '', team_name).strip()
-
-        conf = cells[2].get_text(strip=True)
-
-        try:
-            adj_em = float(cells[4].get_text(strip=True))
-            adj_o = float(cells[5].get_text(strip=True))
-            adj_d = float(cells[6].get_text(strip=True))
-            adj_t = float(cells[7].get_text(strip=True))
-        except (ValueError, IndexError):
-            continue
-
+        conf = entry.get("ConfShort")
         team_id = get_or_create_team(conn, team_name, conference=conf)
-        upsert_team_stat(conn, team_id, season, "adj_efficiency_margin", adj_em)
-        upsert_team_stat(conn, team_id, season, "adj_offensive_efficiency", adj_o)
-        upsert_team_stat(conn, team_id, season, "adj_defensive_efficiency", adj_d)
-        upsert_team_stat(conn, team_id, season, "adj_tempo", adj_t)
+
+        for api_field, stat_name in KENPOM_RATINGS_FIELDS.items():
+            value = entry.get(api_field)
+            if value is not None:
+                upsert_team_stat(conn, team_id, season, stat_name, float(value))
+
         count += 1
 
     conn.commit()
     conn.close()
-    print(f"Imported KenPom stats for {count} teams (season {season})")
+    print(f"Imported KenPom ratings for {count} teams (season {season})")
 
 
 def compute_season_stats(season: int):
