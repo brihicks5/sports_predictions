@@ -161,8 +161,19 @@ def upsert_game(conn: sqlite3.Connection, season: int, date: str,
 
 
 def upsert_team_stat(conn: sqlite3.Connection, team_id: int, season: int,
-                     stat_name: str, stat_value: float):
-    """Insert or update a team stat for a season."""
+                     stat_name: str, stat_value: float) -> bool:
+    """Insert or update a team stat for a season.
+
+    Returns True if the value was inserted or changed, False if unchanged.
+    """
+    row = conn.execute(
+        "SELECT stat_value FROM team_stats WHERE team_id=? AND season=? AND stat_name=?",
+        (team_id, season, stat_name)
+    ).fetchone()
+
+    if row is not None and row["stat_value"] == stat_value:
+        return False
+
     conn.execute("""
         INSERT INTO team_stats (team_id, season, stat_name, stat_value,
                                updated_at)
@@ -171,3 +182,4 @@ def upsert_team_stat(conn: sqlite3.Connection, team_id: int, season: int,
         DO UPDATE SET stat_value=excluded.stat_value,
                       updated_at=datetime('now')
     """, (team_id, season, stat_name, stat_value))
+    return True

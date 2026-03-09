@@ -177,16 +177,19 @@ KENPOM_RATINGS_FIELDS = {
 }
 
 
-def fetch_kenpom_ratings(season: int):
+def fetch_kenpom_ratings(season: int) -> int:
     """Fetch team ratings from the KenPom API and store in the database.
 
     Uses the ratings endpoint to get adjusted efficiency, tempo,
     strength of schedule, and other advanced metrics.
+
+    Returns the number of stats that were inserted or changed.
     """
     data = _kenpom_api_request("ratings", {"y": season})
 
     conn = get_db(SPORT)
-    count = 0
+    team_count = 0
+    changed = 0
 
     for entry in data:
         team_name = entry.get("TeamName")
@@ -200,13 +203,15 @@ def fetch_kenpom_ratings(season: int):
         for api_field, stat_name in KENPOM_RATINGS_FIELDS.items():
             value = entry.get(api_field)
             if value is not None:
-                upsert_team_stat(conn, team_id, season, stat_name, float(value))
+                if upsert_team_stat(conn, team_id, season, stat_name, float(value)):
+                    changed += 1
 
-        count += 1
+        team_count += 1
 
     conn.commit()
     conn.close()
-    print(f"Imported KenPom ratings for {count} teams (season {season})")
+    print(f"Imported KenPom ratings for {team_count} teams (season {season}), {changed} stats changed")
+    return changed
 
 
 # Four-factors: the fundamental drivers of scoring efficiency.
@@ -223,16 +228,19 @@ KENPOM_FOUR_FACTORS_FIELDS = {
 }
 
 
-def fetch_kenpom_four_factors(season: int):
+def fetch_kenpom_four_factors(season: int) -> int:
     """Fetch four-factors stats from the KenPom API and store in the database.
 
     The four factors of basketball: effective FG%, turnover rate,
     offensive rebound rate, and free throw rate — on both offense and defense.
+
+    Returns the number of stats that were inserted or changed.
     """
     data = _kenpom_api_request("four-factors", {"y": season})
 
     conn = get_db(SPORT)
-    count = 0
+    team_count = 0
+    changed = 0
 
     for entry in data:
         team_name = entry.get("TeamName")
@@ -246,13 +254,15 @@ def fetch_kenpom_four_factors(season: int):
         for api_field, stat_name in KENPOM_FOUR_FACTORS_FIELDS.items():
             value = entry.get(api_field)
             if value is not None:
-                upsert_team_stat(conn, team_id, season, stat_name, float(value))
+                if upsert_team_stat(conn, team_id, season, stat_name, float(value)):
+                    changed += 1
 
-        count += 1
+        team_count += 1
 
     conn.commit()
     conn.close()
-    print(f"Imported KenPom four-factors for {count} teams (season {season})")
+    print(f"Imported KenPom four-factors for {team_count} teams (season {season}), {changed} stats changed")
+    return changed
 
 
 ESPN_SCOREBOARD_URL = (
