@@ -209,6 +209,52 @@ def fetch_kenpom_ratings(season: int):
     print(f"Imported KenPom ratings for {count} teams (season {season})")
 
 
+# Four-factors: the fundamental drivers of scoring efficiency.
+# Only new fields not already covered by ratings endpoint.
+KENPOM_FOUR_FACTORS_FIELDS = {
+    "eFG_Pct": "efg_pct",
+    "TO_Pct": "to_pct",
+    "OR_Pct": "or_pct",
+    "FT_Rate": "ft_rate",
+    "DeFG_Pct": "def_efg_pct",
+    "DTO_Pct": "def_to_pct",
+    "DOR_Pct": "def_or_pct",
+    "DFT_Rate": "def_ft_rate",
+}
+
+
+def fetch_kenpom_four_factors(season: int):
+    """Fetch four-factors stats from the KenPom API and store in the database.
+
+    The four factors of basketball: effective FG%, turnover rate,
+    offensive rebound rate, and free throw rate — on both offense and defense.
+    """
+    data = _kenpom_api_request("four-factors", {"y": season})
+
+    conn = get_db(SPORT)
+    count = 0
+
+    for entry in data:
+        team_name = entry.get("TeamName")
+        if not team_name:
+            continue
+
+        conf = entry.get("ConfShort")
+        team_id = get_or_create_team(conn, team_name, conference=conf,
+                                         source="kenpom")
+
+        for api_field, stat_name in KENPOM_FOUR_FACTORS_FIELDS.items():
+            value = entry.get(api_field)
+            if value is not None:
+                upsert_team_stat(conn, team_id, season, stat_name, float(value))
+
+        count += 1
+
+    conn.commit()
+    conn.close()
+    print(f"Imported KenPom four-factors for {count} teams (season {season})")
+
+
 ESPN_SCOREBOARD_URL = (
     "https://site.api.espn.com/apis/site/v2/sports/basketball"
     "/mens-college-basketball/scoreboard"

@@ -17,7 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sports_predictions.scrapers.ncaa_basketball import (
-    compute_season_stats, fetch_espn_games, fetch_kenpom_ratings
+    compute_season_stats, fetch_espn_games, fetch_kenpom_four_factors,
+    fetch_kenpom_ratings
 )
 from sports_predictions.model import train_model
 
@@ -62,6 +63,9 @@ def main():
     if not args.skip_kenpom:
         print("\n--- Fetching KenPom ratings ---")
         fetch_kenpom_ratings(args.season)
+
+        print("\n--- Fetching KenPom four-factors ---")
+        fetch_kenpom_four_factors(args.season)
 
     # Step 3: Retrain model
     if not args.skip_train:
