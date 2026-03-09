@@ -1,6 +1,6 @@
 # sports_predictions
 
-Predict the outcomes of sports games using historical data and machine learning. Currently supports NCAA basketball, with a generic architecture designed to expand to other sports (NFL, NBA, NHL, college football).
+Predict the outcomes of NCAA basketball games using historical data and machine learning.
 
 ## Setup
 
@@ -8,6 +8,7 @@ Predict the outcomes of sports games using historical data and machine learning.
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env  # add your API tokens
 ```
 
 ## Quick Start
@@ -25,19 +26,26 @@ This imports all historical games, computes team stats, and trains the model.
 ### 2. Add KenPom advanced metrics (optional but recommended)
 
 ```bash
-python scripts/update_data.py --season 2026 --kenpom-user you@email.com --kenpom-pass yourpass
+python scripts/update_data.py --season 2026 --skip-espn
 ```
 
-### 3. Predict a game
+### 3. Fetch recent game results
+
+```bash
+python scripts/fetch_games.py 2026-03-02              # single date
+python scripts/fetch_games.py 2026-03-02 2026-03-08   # date range
+```
+
+### 4. Predict a game
 
 ```bash
 python scripts/predict.py "Duke" "North Carolina" --season 2026
 python scripts/predict.py "Duke" "North Carolina" --neutral  # neutral site
 ```
 
-### 4. Nightly updates
+### 5. Nightly updates
 
-Run `scripts/update_data.py` via cron to keep stats and the model current during the season.
+Run `scripts/update_data.py` via cron to fetch ESPN games, refresh KenPom stats, and retrain the model.
 
 ## Project Structure
 
@@ -45,22 +53,18 @@ Run `scripts/update_data.py` via cron to keep stats and the model current during
 sports_predictions/
 ├── sports_predictions/       # Python package
 │   ├── db.py                 # Generic SQLite schema (works for any sport)
-│   ├── model.py              # Gradient boosted classifier
+│   ├── model.py              # Gradient boosted classifier + regressors
 │   └── scrapers/
-│       └── ncaa_basketball.py
+│       └── ncaa_basketball.py  # Kaggle, KenPom, ESPN importers
 ├── scripts/
 │   ├── import_kaggle.py      # Bootstrap with historical data
 │   ├── update_data.py        # Nightly update script
-│   └── predict.py            # CLI for predictions
+│   ├── fetch_games.py        # Fetch ESPN games by date/range
+│   ├── predict.py            # CLI for predictions
+│   └── migrate_team_aliases.py  # One-time team deduplication
 ├── data/                     # SQLite DBs & models (gitignored)
 └── requirements.txt
 ```
-
-## Adding a New Sport
-
-1. Create a new scraper in `sports_predictions/scrapers/`
-2. Use the same `db.py` helpers — each sport gets its own `.db` file
-3. The model in `model.py` is generic and works with any sport's stats
 
 ---
 
