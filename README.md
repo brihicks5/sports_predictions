@@ -43,9 +43,35 @@ python scripts/predict.py "Duke" "North Carolina" --season 2026
 python scripts/predict.py "Duke" "North Carolina" --neutral  # neutral site
 ```
 
-### 5. Nightly updates
+## Data Refresh
 
-Run `scripts/update_data.py` via cron to fetch ESPN games, refresh KenPom stats, and retrain the model.
+Run `scripts/update_data.py` to fetch ESPN games, refresh KenPom stats, and retrain the model:
+
+```bash
+python scripts/update_data.py --season 2026
+```
+
+The script automatically skips model retraining when no new data is detected (no new ESPN games and no KenPom stat changes). You can also control behavior with flags:
+
+```bash
+python scripts/update_data.py --season 2026 --skip-espn     # skip ESPN fetch
+python scripts/update_data.py --season 2026 --skip-kenpom   # skip KenPom fetch
+python scripts/update_data.py --season 2026 --skip-train    # skip model training
+```
+
+Set this up as a cron job for nightly updates.
+
+## Testing
+
+```bash
+pip install pytest
+python -m pytest tests/ -v
+```
+
+Tests cover:
+- **update_data** — skip-training logic, CLI flag combinations
+- **db** — upsert change detection, game inserts, team resolution/dedup
+- **scrapers** — NCAA season date mapping
 
 ## Project Structure
 
@@ -62,6 +88,7 @@ sports_predictions/
 │   ├── fetch_games.py        # Fetch ESPN games by date/range
 │   ├── predict.py            # CLI for predictions
 │   └── migrate_team_aliases.py  # One-time team deduplication
+├── tests/                    # Unit tests
 ├── data/                     # SQLite DBs & models (gitignored)
 └── requirements.txt
 ```

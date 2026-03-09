@@ -17,4 +17,4 @@ NCAA basketball (and eventually other sports) game outcome prediction using hist
 - Use `python -u` for scripts that print progress (avoids output buffering)
 - Source `.env` before running scripts that need API tokens: `set -a && source .env && set +a`
 - KenPom scraper uses the API (not web scraping) — see `kenpom-api.md` in memory for reference
-- D5 Hockey code has been moved to `brihicks5/d5_hockey_modeling`
+- Run tests with `python -m pytest tests/ -v`
