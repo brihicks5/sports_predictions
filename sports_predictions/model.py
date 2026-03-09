@@ -45,7 +45,8 @@ def build_training_data(sport: str, seasons: list = None):
 
     if seasons is None:
         rows = conn.execute(
-            "SELECT DISTINCT season FROM games ORDER BY season"
+            "SELECT DISTINCT season FROM games WHERE season >= 2010 "
+            "ORDER BY season"
         ).fetchall()
         seasons = [r["season"] for r in rows]
 
