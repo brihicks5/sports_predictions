@@ -289,7 +289,7 @@ def fetch_espn_games(date_str: str):
     Args:
         date_str: Date in YYYY-MM-DD format.
 
-    Returns the number of games imported.
+    Returns the number of games that were new or changed.
     """
     espn_date = date_str.replace("-", "")
     resp = requests.get(ESPN_SCOREBOARD_URL,
@@ -305,7 +305,8 @@ def fetch_espn_games(date_str: str):
     season = _date_to_season(date_str)
 
     conn = get_db(SPORT)
-    count = 0
+    total = 0
+    changed = 0
     unmatched = []
 
     for event in events:
@@ -349,9 +350,10 @@ def fetch_espn_games(date_str: str):
         away_score = int(away["score"])
         neutral = comp.get("neutralSite", False)
 
-        upsert_game(conn, season, date_str, home_id, away_id,
-                     home_score, away_score, neutral_site=neutral)
-        count += 1
+        if upsert_game(conn, season, date_str, home_id, away_id,
+                        home_score, away_score, neutral_site=neutral):
+            changed += 1
+        total += 1
 
     conn.commit()
     conn.close()
@@ -361,8 +363,8 @@ def fetch_espn_games(date_str: str):
         print(f"WARNING: {len(unique)} unmatched ESPN teams "
               f"(may need alias mapping): {unique}")
 
-    print(f"Imported {count} ESPN games for {date_str}")
-    return count
+    print(f"ESPN {date_str}: {changed} changed, {total} total games")
+    return changed
 
 
 def compute_season_stats(season: int):

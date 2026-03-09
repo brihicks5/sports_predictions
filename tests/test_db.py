@@ -57,14 +57,22 @@ class TestUpsertTeamStat:
 
 
 class TestUpsertGame:
-    def test_insert_game(self, conn):
+    def test_insert_returns_true(self, conn):
+        conn.execute("INSERT INTO teams (name) VALUES ('Duke')")
+        conn.execute("INSERT INTO teams (name) VALUES ('UNC')")
+        assert upsert_game(conn, 2026, "2026-03-08", 1, 2, 80, 70) is True
+
+    def test_same_values_returns_false(self, conn):
         conn.execute("INSERT INTO teams (name) VALUES ('Duke')")
         conn.execute("INSERT INTO teams (name) VALUES ('UNC')")
         upsert_game(conn, 2026, "2026-03-08", 1, 2, 80, 70)
-        row = conn.execute("SELECT * FROM games").fetchone()
-        assert row["home_score"] == 80
-        assert row["away_score"] == 70
-        assert row["neutral_site"] == 0
+        assert upsert_game(conn, 2026, "2026-03-08", 1, 2, 80, 70) is False
+
+    def test_changed_score_returns_true(self, conn):
+        conn.execute("INSERT INTO teams (name) VALUES ('Duke')")
+        conn.execute("INSERT INTO teams (name) VALUES ('UNC')")
+        upsert_game(conn, 2026, "2026-03-08", 1, 2, 80, 70)
+        assert upsert_game(conn, 2026, "2026-03-08", 1, 2, 85, 75) is True
 
     def test_upsert_updates_score(self, conn):
         conn.execute("INSERT INTO teams (name) VALUES ('Duke')")
@@ -77,7 +85,7 @@ class TestUpsertGame:
     def test_neutral_site_flag(self, conn):
         conn.execute("INSERT INTO teams (name) VALUES ('Duke')")
         conn.execute("INSERT INTO teams (name) VALUES ('UNC')")
-        upsert_game(conn, 2026, "2026-03-08", 1, 2, 80, 70, neutral_site=True)
+        assert upsert_game(conn, 2026, "2026-03-08", 1, 2, 80, 70, neutral_site=True) is True
         row = conn.execute("SELECT * FROM games").fetchone()
         assert row["neutral_site"] == 1
 

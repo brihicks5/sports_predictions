@@ -145,8 +145,24 @@ def get_or_create_team(conn: sqlite3.Connection, name: str,
 def upsert_game(conn: sqlite3.Connection, season: int, date: str,
                  home_team_id: int, away_team_id: int,
                  home_score: int, away_score: int,
-                 neutral_site: bool = False, postseason: bool = False):
-    """Insert or update a game result."""
+                 neutral_site: bool = False, postseason: bool = False) -> bool:
+    """Insert or update a game result.
+
+    Returns True if the row was inserted or changed, False if unchanged.
+    """
+    row = conn.execute(
+        "SELECT home_score, away_score, neutral_site, postseason FROM games "
+        "WHERE season=? AND date=? AND home_team_id=? AND away_team_id=?",
+        (season, date, home_team_id, away_team_id)
+    ).fetchone()
+
+    if (row is not None
+            and row["home_score"] == home_score
+            and row["away_score"] == away_score
+            and row["neutral_site"] == int(neutral_site)
+            and row["postseason"] == int(postseason)):
+        return False
+
     conn.execute("""
         INSERT INTO games (season, date, home_team_id, away_team_id,
                           home_score, away_score, neutral_site, postseason)
@@ -158,6 +174,7 @@ def upsert_game(conn: sqlite3.Connection, season: int, date: str,
                       postseason=excluded.postseason
     """, (season, date, home_team_id, away_team_id,
           home_score, away_score, int(neutral_site), int(postseason)))
+    return True
 
 
 def upsert_team_stat(conn: sqlite3.Connection, team_id: int, season: int,
