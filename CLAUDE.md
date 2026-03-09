@@ -9,6 +9,7 @@ NCAA basketball (and eventually other sports) game outcome prediction using hist
 - `data/` is gitignored — contains SQLite DBs, model pickles, and Kaggle CSVs
 
 ## Common Commands
+- **Always activate the venv first**: `source venv/bin/activate`
 - `python scripts/predict.py "Team A" "Team B" --season 2026` — predict a game
 - `python scripts/update_data.py --season 2026` — refresh KenPom + retrain
 - `python scripts/import_kaggle.py` — one-time bulk import from Kaggle
