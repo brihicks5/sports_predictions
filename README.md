@@ -21,7 +21,7 @@ Download the [March Machine Learning Mania](https://www.kaggle.com/competitions/
 python scripts/import_kaggle.py
 ```
 
-This imports all historical games, computes team stats, and trains the model.
+This imports all historical games (converting Kaggle ordinal dates to ISO format), computes team stats, and trains the model.
 
 ### 2. Add KenPom advanced metrics (optional but recommended)
 
@@ -71,7 +71,7 @@ python -m pytest tests/ -v
 Tests cover:
 - **update_data** — skip-training logic, CLI flag combinations
 - **db** — upsert change detection, game inserts, team resolution/dedup
-- **scrapers** — NCAA season date mapping
+- **scrapers** — NCAA season date mapping, Kaggle ordinal-to-ISO conversion
 
 ## Project Structure
 
@@ -79,7 +79,7 @@ Tests cover:
 sports_predictions/
 ├── sports_predictions/       # Python package
 │   ├── db.py                 # Generic SQLite schema (works for any sport)
-│   ├── model.py              # Gradient boosted classifier + regressors
+│   ├── model.py              # Gradient boosted margin + total regressors
 │   └── scrapers/
 │       └── ncaa_basketball.py  # Kaggle, KenPom, ESPN importers
 ├── scripts/
@@ -87,7 +87,8 @@ sports_predictions/
 │   ├── update_data.py        # Nightly update script
 │   ├── fetch_games.py        # Fetch ESPN games by date/range
 │   ├── predict.py            # CLI for predictions
-│   └── migrate_team_aliases.py  # One-time team deduplication
+│   ├── migrate_team_aliases.py  # One-time team deduplication
+│   └── migrate_dates.py       # One-time ordinal-to-ISO date conversion
 ├── tests/                    # Unit tests
 ├── data/                     # SQLite DBs & models (gitignored)
 └── requirements.txt
