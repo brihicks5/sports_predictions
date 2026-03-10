@@ -60,6 +60,15 @@ def _ensure_schema(conn: sqlite3.Connection):
             source TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS team_ratings_by_date (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            team_id INTEGER NOT NULL REFERENCES teams(id),
+            date TEXT NOT NULL,
+            stat_name TEXT NOT NULL,
+            stat_value REAL,
+            UNIQUE(team_id, date, stat_name)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_games_season ON games(season);
         CREATE INDEX IF NOT EXISTS idx_games_date ON games(date);
         CREATE INDEX IF NOT EXISTS idx_team_stats_lookup
@@ -68,6 +77,8 @@ def _ensure_schema(conn: sqlite3.Connection):
             ON team_aliases(alias);
         CREATE INDEX IF NOT EXISTS idx_team_aliases_team
             ON team_aliases(team_id);
+        CREATE INDEX IF NOT EXISTS idx_team_ratings_by_date_lookup
+            ON team_ratings_by_date(team_id, date, stat_name);
     """)
 
 
@@ -199,4 +210,29 @@ def upsert_team_stat(conn: sqlite3.Connection, team_id: int, season: int,
         DO UPDATE SET stat_value=excluded.stat_value,
                       updated_at=datetime('now')
     """, (team_id, season, stat_name, stat_value))
+    return True
+
+
+def upsert_team_rating_by_date(conn: sqlite3.Connection, team_id: int,
+                                date: str, stat_name: str,
+                                stat_value: float) -> bool:
+    """Insert or update a team's rating for a specific date.
+
+    Returns True if the value was inserted or changed, False if unchanged.
+    """
+    row = conn.execute(
+        "SELECT stat_value FROM team_ratings_by_date "
+        "WHERE team_id=? AND date=? AND stat_name=?",
+        (team_id, date, stat_name)
+    ).fetchone()
+
+    if row is not None and row["stat_value"] == stat_value:
+        return False
+
+    conn.execute("""
+        INSERT INTO team_ratings_by_date (team_id, date, stat_name, stat_value)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(team_id, date, stat_name)
+        DO UPDATE SET stat_value=excluded.stat_value
+    """, (team_id, date, stat_name, stat_value))
     return True

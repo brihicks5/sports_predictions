@@ -14,7 +14,8 @@ from pathlib import Path
 import requests
 
 from sports_predictions.db import (
-    get_db, get_or_create_team, upsert_game, upsert_team_stat
+    get_db, get_or_create_team, upsert_game, upsert_team_stat,
+    upsert_team_rating_by_date
 )
 
 SPORT = "ncaa_basketball"
@@ -280,6 +281,79 @@ def fetch_kenpom_four_factors(season: int) -> int:
     conn.close()
     print(f"Imported KenPom four-factors for {team_count} teams (season {season}), {changed} stats changed")
     return changed
+
+
+# Archive endpoint fields — point-in-time adjusted ratings
+KENPOM_ARCHIVE_FIELDS = {
+    "AdjEM": "adj_efficiency_margin",
+    "AdjOE": "adj_offensive_efficiency",
+    "AdjDE": "adj_defensive_efficiency",
+    "AdjTempo": "adj_tempo",
+}
+
+
+def fetch_kenpom_archive_date(date_str: str) -> int:
+    """Fetch KenPom ratings for a specific date and store in team_ratings_by_date.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format.
+
+    Returns the number of stats that were inserted or changed.
+    """
+    data = _kenpom_api_request("archive", {"d": date_str})
+
+    conn = get_db(SPORT)
+    changed = 0
+
+    for entry in data:
+        team_name = entry.get("TeamName")
+        if not team_name:
+            continue
+
+        team_id = get_or_create_team(conn, team_name, source="kenpom")
+
+        for api_field, stat_name in KENPOM_ARCHIVE_FIELDS.items():
+            value = entry.get(api_field)
+            if value is not None:
+                if upsert_team_rating_by_date(
+                    conn, team_id, date_str, stat_name, float(value)
+                ):
+                    changed += 1
+
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def fetch_kenpom_archive_season(season: int) -> int:
+    """Fetch KenPom archive ratings for all game dates in a season.
+
+    Finds all unique game dates for the season in the database,
+    then fetches archive ratings for each date.
+
+    Returns the total number of stats that were inserted or changed.
+    """
+    conn = get_db(SPORT)
+    dates = conn.execute(
+        "SELECT DISTINCT date FROM games WHERE season = ? ORDER BY date",
+        (season,)
+    ).fetchall()
+    conn.close()
+
+    unique_dates = [r["date"] for r in dates]
+    print(f"Fetching KenPom archive for {len(unique_dates)} dates "
+          f"(season {season})")
+
+    total_changed = 0
+    for i, date_str in enumerate(unique_dates):
+        changed = fetch_kenpom_archive_date(date_str)
+        total_changed += changed
+        if (i + 1) % 25 == 0:
+            print(f"  {i + 1} / {len(unique_dates)} dates fetched...")
+
+    print(f"KenPom archive for season {season}: {total_changed} stats "
+          f"across {len(unique_dates)} dates")
+    return total_changed
 
 
 ESPN_SCOREBOARD_URL = (
