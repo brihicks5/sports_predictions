@@ -299,8 +299,21 @@ def fetch_kenpom_archive_date(date_str: str) -> int:
         date_str: Date in YYYY-MM-DD format.
 
     Returns the number of stats that were inserted or changed.
+    Returns -1 if the date is out of range for the archive endpoint.
     """
-    data = _kenpom_api_request("archive", {"d": date_str})
+    token = _get_kenpom_api_token()
+    resp = requests.get(
+        "https://kenpom.com/api.php",
+        params={"endpoint": "archive", "d": date_str},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if resp.status_code in (400, 404):
+        return -1
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"KenPom API error {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
 
     conn = get_db(SPORT)
     changed = 0
@@ -345,14 +358,19 @@ def fetch_kenpom_archive_season(season: int) -> int:
           f"(season {season})")
 
     total_changed = 0
+    skipped = 0
     for i, date_str in enumerate(unique_dates):
         changed = fetch_kenpom_archive_date(date_str)
-        total_changed += changed
+        if changed == -1:
+            skipped += 1
+        else:
+            total_changed += changed
         if (i + 1) % 25 == 0:
             print(f"  {i + 1} / {len(unique_dates)} dates fetched...")
 
     print(f"KenPom archive for season {season}: {total_changed} stats "
-          f"across {len(unique_dates)} dates")
+          f"across {len(unique_dates) - skipped} dates "
+          f"({skipped} dates out of range)")
     return total_changed
 
 

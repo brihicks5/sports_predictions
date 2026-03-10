@@ -110,6 +110,95 @@ def build_training_data(sport: str, seasons: list = None):
     return X, y_win, y_margin, y_total, feature_stats
 
 
+# Stats available from the KenPom archive endpoint (point-in-time)
+ARCHIVE_STATS = [
+    "adj_efficiency_margin",
+    "adj_offensive_efficiency",
+    "adj_defensive_efficiency",
+    "adj_tempo",
+]
+
+
+def _get_team_ratings_by_date(conn, team_id: int, date: str,
+                               stat_names: list) -> dict:
+    """Get a team's point-in-time ratings for a specific date."""
+    rows = conn.execute("""
+        SELECT stat_name, stat_value FROM team_ratings_by_date
+        WHERE team_id = ? AND date = ? AND stat_name IN ({})
+    """.format(",".join("?" * len(stat_names))),
+        (team_id, date, *stat_names)
+    ).fetchall()
+    return {r["stat_name"]: r["stat_value"] for r in rows}
+
+
+def build_training_data_pit(sport: str, seasons: list = None):
+    """Build feature matrix using point-in-time KenPom ratings.
+
+    Like build_training_data, but uses team_ratings_by_date to get
+    each team's stats as of the game date, not end-of-season values.
+
+    Returns X, y_win, y_margin, y_total, and feature_stats.
+    """
+    conn = get_db(sport)
+
+    if seasons is None:
+        rows = conn.execute(
+            "SELECT DISTINCT season FROM games WHERE season >= 2010 "
+            "ORDER BY season"
+        ).fetchall()
+        seasons = [r["season"] for r in rows]
+
+    feature_stats = ARCHIVE_STATS
+
+    X_rows = []
+    y_win_rows = []
+    y_margin_rows = []
+    y_total_rows = []
+
+    for season in seasons:
+        games = conn.execute("""
+            SELECT home_team_id, away_team_id, home_score, away_score,
+                   neutral_site, date
+            FROM games
+            WHERE season = ? AND home_score IS NOT NULL
+            ORDER BY date
+        """, (season,)).fetchall()
+
+        for game in games:
+            home_feats = _get_team_ratings_by_date(
+                conn, game["home_team_id"], game["date"], feature_stats
+            )
+            away_feats = _get_team_ratings_by_date(
+                conn, game["away_team_id"], game["date"], feature_stats
+            )
+
+            # Skip if either team has no ratings for this date
+            if not home_feats or not away_feats:
+                continue
+
+            row = {}
+            for stat in feature_stats:
+                home_val = home_feats.get(stat, 0.0)
+                away_val = away_feats.get(stat, 0.0)
+                row[f"diff_{stat}"] = home_val - away_val
+            row["neutral_site"] = game["neutral_site"]
+
+            X_rows.append(row)
+            y_win_rows.append(
+                1 if game["home_score"] > game["away_score"] else 0
+            )
+            y_margin_rows.append(game["home_score"] - game["away_score"])
+            y_total_rows.append(game["home_score"] + game["away_score"])
+
+    conn.close()
+
+    X = pd.DataFrame(X_rows)
+    y_win = np.array(y_win_rows)
+    y_margin = np.array(y_margin_rows)
+    y_total = np.array(y_total_rows)
+    return X, y_win, y_margin, y_total, feature_stats
+
+
 def _logistic(x, k):
     """Logistic function: P(home_win) = 1 / (1 + exp(-k * margin))."""
     return 1.0 / (1.0 + np.exp(np.clip(-k * x, -500, 500)))
