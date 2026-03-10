@@ -16,9 +16,17 @@ from sklearn.model_selection import cross_val_score
 
 from sports_predictions.db import get_db, resolve_team, DATA_DIR
 
-# Stats to exclude from features (e.g. metadata that shouldn't be model inputs).
-# Everything else in team_stats is used automatically.
-EXCLUDED_STATS = {"games_played"}
+# Top 8 features by importance. Using an explicit allowlist rather than
+# auto-discovering all stats — extra features add noise without improving accuracy.
+FEATURE_STATS = [
+    "adj_efficiency_margin",
+    "pythag",
+    "avg_margin",
+    "win_pct",
+    "luck",
+    "sos",
+    "sos_offense",
+]
 
 
 def _get_team_features(conn, team_id: int, season: int,
@@ -51,21 +59,7 @@ def build_training_data(sport: str, seasons: list = None):
         ).fetchall()
         seasons = [r["season"] for r in rows]
 
-    # Use all stats in the database except excluded ones
-    available = conn.execute(
-        "SELECT DISTINCT stat_name FROM team_stats ORDER BY stat_name"
-    ).fetchall()
-    feature_stats = [
-        r["stat_name"] for r in available
-        if r["stat_name"] not in EXCLUDED_STATS
-    ]
-
-    if not feature_stats:
-        conn.close()
-        raise ValueError(
-            "No feature stats found in database. "
-            "Import team stats before training."
-        )
+    feature_stats = FEATURE_STATS
 
     X_rows = []
     y_win_rows = []
@@ -261,8 +255,14 @@ def predict_game(sport: str, home_team: str, away_team: str,
     home_win_prob = _logistic(pred_margin, margin_to_win_k)
 
     # Derive individual scores: total = home + away, margin = home - away
-    pred_home_score = (pred_total + pred_margin) / 2
-    pred_away_score = (pred_total - pred_margin) / 2
+    # Round margin first, then derive scores so they stay consistent
+    rounded_margin = round(pred_margin)
+    rounded_total = round(pred_total)
+    # Ensure total and margin have the same parity (both even or both odd)
+    if rounded_total % 2 != rounded_margin % 2:
+        rounded_total += 1
+    pred_home_score = (rounded_total + rounded_margin) // 2
+    pred_away_score = (rounded_total - rounded_margin) // 2
 
     return {
         "home_team": home_team,
