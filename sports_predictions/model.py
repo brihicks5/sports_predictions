@@ -6,11 +6,12 @@ stats in the database.
 """
 
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import cross_val_score
 
 from sports_predictions.db import get_db, resolve_team, DATA_DIR
@@ -115,71 +116,80 @@ def build_training_data(sport: str, seasons: list = None):
     return X, y_win, y_margin, y_total, feature_stats
 
 
+def _logistic(x, k):
+    """Logistic function: P(home_win) = 1 / (1 + exp(-k * margin))."""
+    return 1.0 / (1.0 + np.exp(np.clip(-k * x, -500, 500)))
+
+
 def train_model(sport: str, seasons: list = None):
     """Train prediction models and save to disk.
 
-    Trains three models:
-    - Win classifier (who wins)
+    Trains two models:
     - Margin regressor (by how much)
     - Total regressor (combined score)
 
-    Returns the win model and cross-validation accuracy.
+    Win probability is derived from predicted margin via a logistic function
+    fitted on historical results, ensuring margin and win prob never disagree.
+
+    Returns the margin model and cross-validation margin MAE.
     """
     X, y_win, y_margin, y_total, feature_stats = build_training_data(
         sport, seasons
     )
     print(f"Training on {len(X)} games with features: {feature_stats}")
 
-    # Win probability classifier
-    win_model = GradientBoostingClassifier(
-        n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
-    )
-    win_scores = cross_val_score(win_model, X, y_win, cv=5, scoring="accuracy")
-    print(f"Win classifier accuracy: {win_scores.mean():.4f} "
-          f"(+/- {win_scores.std():.4f})")
-    win_model.fit(X, y_win)
+    def _train_regressor(y, label):
+        """Train a regressor with CV and return (model, scores)."""
+        model = GradientBoostingRegressor(
+            n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
+        )
+        scores = cross_val_score(
+            model, X, y, cv=5, scoring="neg_mean_absolute_error"
+        )
+        print(f"{label} MAE: {-scores.mean():.2f} pts "
+              f"(+/- {scores.std():.2f})")
+        model.fit(X, y)
+        return model, scores
 
-    # Score margin regressor (home - away)
-    margin_model = GradientBoostingRegressor(
-        n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
-    )
-    margin_scores = cross_val_score(
-        margin_model, X, y_margin, cv=5, scoring="neg_mean_absolute_error"
-    )
-    print(f"Margin MAE: {-margin_scores.mean():.2f} pts "
-          f"(+/- {margin_scores.std():.2f})")
-    margin_model.fit(X, y_margin)
+    # Train margin and total regressors in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        margin_future = executor.submit(_train_regressor, y_margin, "Margin")
+        total_future = executor.submit(_train_regressor, y_total, "Total")
+        margin_model, margin_scores = margin_future.result()
+        total_model, total_scores = total_future.result()
 
-    # Total points regressor
-    total_model = GradientBoostingRegressor(
-        n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
-    )
-    total_scores = cross_val_score(
-        total_model, X, y_total, cv=5, scoring="neg_mean_absolute_error"
-    )
-    print(f"Total MAE: {-total_scores.mean():.2f} pts "
-          f"(+/- {total_scores.std():.2f})")
-    total_model.fit(X, y_total)
+    # Derive logistic k from margin standard deviation
+    # P(home_win | margin) = 1 / (1 + exp(-k * margin))
+    # k = pi / (std * sqrt(3)) matches the logistic CDF to the margin distribution
+    margin_std = np.std(y_margin)
+    margin_to_win_k = np.pi / (margin_std * np.sqrt(3))
+    print(f"Logistic k={margin_to_win_k:.4f} (margin std={margin_std:.2f}, "
+          f"margin of 5 -> {_logistic(5, margin_to_win_k)*100:.1f}% win prob)")
 
-    # Save all models
+    # Win accuracy: use margin model's training predictions as rough estimate
+    train_margin_preds = margin_model.predict(X)
+    win_accuracy = ((train_margin_preds > 0).astype(int) == y_win).mean()
+    print(f"Win accuracy (from margin, train set): {win_accuracy:.4f}")
+
+    # Save models
     model_path = DATA_DIR / f"{sport}_model.pkl"
     with open(model_path, "wb") as f:
         pickle.dump({
-            "win_model": win_model,
             "margin_model": margin_model,
             "total_model": total_model,
+            "margin_to_win_k": margin_to_win_k,
             "feature_stats": feature_stats,
             "feature_columns": list(X.columns),
         }, f)
     print(f"Models saved to {model_path}")
 
-    # Feature importance (from win model)
-    print("\nFeature importance (win model):")
-    for name, imp in sorted(zip(X.columns, win_model.feature_importances_),
+    # Feature importance (from margin model)
+    print("\nFeature importance (margin model):")
+    for name, imp in sorted(zip(X.columns, margin_model.feature_importances_),
                             key=lambda x: -x[1]):
         print(f"  {name}: {imp:.4f}")
 
-    return win_model, win_scores.mean()
+    return margin_model, -margin_scores.mean()
 
 
 def predict_game(sport: str, home_team: str, away_team: str,
@@ -198,9 +208,9 @@ def predict_game(sport: str, home_team: str, away_team: str,
     with open(model_path, "rb") as f:
         saved = pickle.load(f)
 
-    win_model = saved["win_model"]
     margin_model = saved["margin_model"]
     total_model = saved["total_model"]
+    margin_to_win_k = saved["margin_to_win_k"]
     feature_stats = saved["feature_stats"]
     feature_columns = saved["feature_columns"]
 
@@ -243,13 +253,12 @@ def predict_game(sport: str, home_team: str, away_team: str,
 
     X = pd.DataFrame([row])[feature_columns]
 
-    # Win probability
-    prob = win_model.predict_proba(X)[0]
-    home_win_prob = prob[1]
-
     # Predicted margin (home - away) and total
     pred_margin = margin_model.predict(X)[0]
     pred_total = total_model.predict(X)[0]
+
+    # Win probability derived from margin via logistic function
+    home_win_prob = _logistic(pred_margin, margin_to_win_k)
 
     # Derive individual scores: total = home + away, margin = home - away
     pred_home_score = (pred_total + pred_margin) / 2
