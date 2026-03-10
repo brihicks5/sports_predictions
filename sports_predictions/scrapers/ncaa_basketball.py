@@ -8,7 +8,7 @@ Supports:
 
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -18,6 +18,24 @@ from sports_predictions.db import (
 )
 
 SPORT = "ncaa_basketball"
+
+
+def _first_monday_in_november(year: int) -> datetime:
+    """Return the first Monday in November for a given year."""
+    # Nov 1, then advance to Monday
+    nov1 = datetime(year, 11, 1)
+    days_until_monday = (7 - nov1.weekday()) % 7
+    return nov1 + timedelta(days=days_until_monday)
+
+
+def kaggle_day_to_date(season: int, day_num: int) -> str:
+    """Convert a Kaggle season + DayNum to an ISO date string.
+
+    Kaggle DayNum counts from the first Monday in November of the year
+    before the season label (e.g. season 2026 day 0 = Mon Nov 3 2025).
+    """
+    day0 = _first_monday_in_november(season - 1)
+    return (day0 + timedelta(days=day_num)).strftime("%Y-%m-%d")
 
 
 def import_kaggle_games(csv_path: str):
@@ -65,9 +83,8 @@ def import_kaggle_games(csv_path: str):
 
             neutral = wloc == "N"
 
-            # DayNum is days since a reference date; use it as a proxy date
-            day_num = row.get("DayNum", "0")
-            date_str = f"{season}-{int(day_num):03d}"
+            day_num = int(row.get("DayNum", "0"))
+            date_str = kaggle_day_to_date(season, day_num)
 
             upsert_game(conn, season, date_str, home_id, away_id,
                         home_score, away_score, neutral_site=neutral)
@@ -116,8 +133,8 @@ def import_kaggle_tourney(csv_path: str):
                 home_id, away_id = w_id, l_id
                 home_score, away_score = int(row["WScore"]), int(row["LScore"])
 
-            day_num = row.get("DayNum", "0")
-            date_str = f"{season}-{int(day_num):03d}"
+            day_num = int(row.get("DayNum", "0"))
+            date_str = kaggle_day_to_date(season, day_num)
 
             upsert_game(conn, season, date_str, home_id, away_id,
                         home_score, away_score, neutral_site=(wloc == "N"),
