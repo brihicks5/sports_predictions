@@ -132,6 +132,83 @@ Result: 0.17% importance. MAE identical to baseline. The neutral_site
 flag already captures what matters about venue effects.
 
 
+12. 3pt Shooting Reliance (2026-03-10)
+-----------------------------------------
+Experiment: Import F3GRate (3pt attempt rate) and OppF3GRate (opponent 3pt
+attempt rate) from KenPom misc-stats endpoint. Hypothesis: teams that rely
+heavily on 3pt shooting have more variance in scoring, which could predict
+upsets. Ideally we'd use game-level 3pt variance, but that would require
+~92k individual ESPN box score API calls.
+Result: 0.16-0.18% importance. MAE 7.63 vs 7.62 (within noise). 3pt
+reliance is already captured by the efficiency ratings.
+
+
+13. Travel Distance (2026-03-10)
+----------------------------------
+Experiment: Geocode arena locations (city/state from KenPom teams endpoint)
+using Nominatim. Compute haversine distance between home and away team arenas
+for each game. 308 unique locations geocoded, 218/365 teams matched to DB IDs.
+Result: 0.18-0.22% importance. MAE identical to baseline. Travel distance
+has no meaningful effect on game outcomes beyond what's already captured
+by team quality ratings.
+
+
+14. XGBoost / LightGBM / Stacking Ensemble (2026-03-10)
+---------------------------------------------------------
+Experiment: Compare modern gradient boosting (XGBoost, LightGBM) against the
+MLP and sklearn GBM. Also tested stacking ensembles combining all three via
+simple averaging, weighted combinations, and a linear meta-learner.
+
+  Model               | MAE (OOF) | Win Acc (OOF) | Time
+  MLP (64-32)         | 7.615     | 80.14%        | 32s
+  XGBoost (tuned)     | 7.665     | 80.08%        | 5.5s
+  LightGBM (tuned)    | 7.654     | 80.11%        | 10.5s
+  sklearn GBM         | 7.657     | 80.18%        | 216s
+  Meta-Linear stack   | 7.614     | 80.15%        | —
+
+Result: All models converge to the same ~80.1% / 7.61 MAE when evaluated
+with out-of-fold predictions. The meta-learner assigns 81% weight to MLP,
+17% to LightGBM, and 1% to XGBoost — they make nearly identical predictions.
+XGBoost appeared better at 80.87% win accuracy on training data, but that was
+overfitting. The accuracy ceiling is in the data, not the model architecture.
+MLP retained as production model (best MAE, reasonable speed).
+
+
+15. Contextual Features: Season Month, Games Played, Conference (2026-03-10)
+------------------------------------------------------------------------------
+Experiment: Add three non-stat contextual features:
+- season_month: calendar month mapped to season progression (Nov=1..Apr=6)
+- avg_games_played: average games played by both teams at game time
+- same_conference: 1 if teams are in the same conference, 0 otherwise
+
+Result: Small but consistent improvement. MAE 7.587 vs 7.612 baseline
+(best improvement of any feature tested). Feature importances: same_conference
+0.69%, avg_games_played 0.64%, season_month 0.39%. All three adopted into
+the production model — the first new features added since the original top 8.
+
+
+16. Tournament Seeds (2026-03-10)
+------------------------------------
+Experiment: Import historical NCAA tournament seeds from Kaggle dataset
+(MNCAATourneySeeds.csv, 2,626 entries from 1985-2025). Added diff_seed
+(home seed - away seed) and is_tourney flag. Tested on tournament games
+only (1,001 games) and on full training set with seed=0 for regular season.
+Result: 0.19% importance. No improvement. Seeds are highly correlated with
+KenPom ratings — a 1-seed has a great AdjEM, a 16-seed has a terrible one.
+The seed number adds no information beyond what efficiency margin captures.
+
+
+17. Coach Tenure (2026-03-10)
+-------------------------------
+Experiment: Import coach history from Kaggle (MTeamCoaches.csv, 13,900
+entries). Computed consecutive years each coach has been at their current
+school. Features: diff_coach_tenure (home - away), home_new_coach flag,
+away_new_coach flag.
+Result: 0.17% importance for tenure diff, 0.10% for new coach flags.
+MAE slightly worse (7.62 vs 7.59). A coach's impact is already reflected
+in the team's KenPom ratings.
+
+
 Summary & Conclusions
 -----------------------
 ~80% win accuracy appears to be the ceiling for approaches based on
@@ -149,6 +226,10 @@ Features tested and found redundant:
 - Rest days between games
 - Opponent adjustment (playing up/down to competition)
 - Home/away performance rank (team-specific home court advantage)
+- 3pt shooting reliance (F3GRate, OppF3GRate)
+- Travel distance between arenas
+- Tournament seed matchups (redundant with efficiency ratings)
+- Coach tenure / new coach indicator
 
 Model changes that helped:
 - Switching from GBM to MLP: +0.2% win accuracy, 20x faster training
@@ -158,7 +239,5 @@ Model changes that helped:
 Potential paths to break through 80%:
 - Vegas closing lines (market aggregates non-statistical information)
 - Injury/availability data (no good historical source found yet)
-- Tournament-specific context (seed matchup history, conference
-  tournament fatigue)
 - Fundamentally different approaches (player-level models, game
   simulation)

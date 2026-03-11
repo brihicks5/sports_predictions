@@ -43,11 +43,24 @@ def _get_team_features(conn, team_id: int, season: int,
     return {r["stat_name"]: r["stat_value"] for r in rows}
 
 
+def _get_team_conference(conn, team_id: int) -> str:
+    """Get a team's conference from the teams table."""
+    row = conn.execute(
+        "SELECT conference FROM teams WHERE id = ?", (team_id,)
+    ).fetchone()
+    return row["conference"] if row and row["conference"] else ""
+
+
+# Map calendar month to season progression (Nov=1 through Apr=6)
+_MONTH_TO_SEASON = {11: 1, 12: 2, 1: 3, 2: 4, 3: 5, 4: 6}
+
+
 def build_training_data(sport: str, seasons: list = None):
     """Build feature matrix from historical games.
 
     For each game, features are the difference between home team stats
-    and away team stats (home - away).
+    and away team stats (home - away), plus contextual features:
+    season_month, avg_games_played, same_conference.
 
     Returns X, y_win (1 if home won), y_margin (home - away score),
     y_total (total points), and feature_stats.
@@ -71,10 +84,13 @@ def build_training_data(sport: str, seasons: list = None):
     for season in seasons:
         games = conn.execute("""
             SELECT home_team_id, away_team_id, home_score, away_score,
-                   neutral_site
+                   neutral_site, date
             FROM games
             WHERE season = ? AND home_score IS NOT NULL
+            ORDER BY date
         """, (season,)).fetchall()
+
+        games_played = {}  # team_id -> count
 
         for game in games:
             home_feats = _get_team_features(
@@ -88,6 +104,9 @@ def build_training_data(sport: str, seasons: list = None):
             if not home_feats or not away_feats:
                 continue
 
+            hid = game["home_team_id"]
+            aid = game["away_team_id"]
+
             # Features: difference (home - away) for each stat + home court
             row = {}
             for stat in feature_stats:
@@ -95,6 +114,26 @@ def build_training_data(sport: str, seasons: list = None):
                 away_val = away_feats.get(stat, 0.0)
                 row[f"diff_{stat}"] = home_val - away_val
             row["neutral_site"] = game["neutral_site"]
+
+            # Season month (how far into the season)
+            date_str = game["date"]
+            if date_str:
+                month = int(date_str.split("-")[1])
+                row["season_month"] = _MONTH_TO_SEASON.get(month, 3)
+            else:
+                row["season_month"] = 3
+
+            # Average games played by both teams (team establishment)
+            h_gp = games_played.get(hid, 0)
+            a_gp = games_played.get(aid, 0)
+            row["avg_games_played"] = (h_gp + a_gp) / 2.0
+            games_played[hid] = h_gp + 1
+            games_played[aid] = a_gp + 1
+
+            # Same conference
+            h_conf = _get_team_conference(conn, hid)
+            a_conf = _get_team_conference(conn, aid)
+            row["same_conference"] = 1 if (h_conf and h_conf == a_conf) else 0
 
             X_rows.append(row)
             y_win_rows.append(
@@ -339,12 +378,37 @@ def predict_game(sport: str, home_team: str, away_team: str,
 
     home_feats = _get_team_features(conn, home_id, season, feature_stats)
     away_feats = _get_team_features(conn, away_id, season, feature_stats)
-    conn.close()
 
     row = {}
     for stat in feature_stats:
         row[f"diff_{stat}"] = home_feats.get(stat, 0.0) - away_feats.get(stat, 0.0)
     row["neutral_site"] = int(neutral_site)
+
+    # Contextual features
+    # Season month: use current month or estimate from season
+    from datetime import date as date_cls
+    today = date_cls.today()
+    row["season_month"] = _MONTH_TO_SEASON.get(today.month, 3)
+
+    # Average games played by both teams this season
+    h_gp = conn.execute(
+        "SELECT COUNT(*) as c FROM games WHERE season = ? "
+        "AND (home_team_id = ? OR away_team_id = ?)",
+        (season, home_id, home_id)
+    ).fetchone()["c"]
+    a_gp = conn.execute(
+        "SELECT COUNT(*) as c FROM games WHERE season = ? "
+        "AND (home_team_id = ? OR away_team_id = ?)",
+        (season, away_id, away_id)
+    ).fetchone()["c"]
+    row["avg_games_played"] = (h_gp + a_gp) / 2.0
+
+    # Same conference
+    h_conf = _get_team_conference(conn, home_id)
+    a_conf = _get_team_conference(conn, away_id)
+    row["same_conference"] = 1 if (h_conf and h_conf == a_conf) else 0
+
+    conn.close()
 
     X = pd.DataFrame([row])[feature_columns]
 
