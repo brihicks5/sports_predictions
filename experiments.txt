@@ -120,6 +120,18 @@ is already captured by the combination of efficiency + SOS + luck.
 Importer code retained for potential future use with other Miya stats.
 
 
+11. Home Rank — Barttorvik/Miya (2026-03-10)
+-----------------------------------------------
+Experiment: Import "home_rank" from Barttorvik Power Ratings. This ranks
+how much better each team performs at home versus on the road. A team
+ranked higher has a much larger home/away performance split. Hypothesis:
+this captures team-specific home court advantage beyond the binary
+neutral_site flag.
+Data available 2010-2026 from same Miya CSV files.
+Result: 0.17% importance. MAE identical to baseline. The neutral_site
+flag already captures what matters about venue effects.
+
+
 Summary & Conclusions
 -----------------------
 ~80% win accuracy appears to be the ceiling for approaches based on
@@ -136,6 +148,7 @@ Features tested and found redundant:
 - Separate offense + defense efficiency (vs combined margin)
 - Rest days between games
 - Opponent adjustment (playing up/down to competition)
+- Home/away performance rank (team-specific home court advantage)
 
 Model changes that helped:
 - Switching from GBM to MLP: +0.2% win accuracy, 20x faster training
