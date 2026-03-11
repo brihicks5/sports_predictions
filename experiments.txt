@@ -1,0 +1,151 @@
+Model Experiments Log
+=====================
+
+This file documents all experiments run to improve the NCAA basketball
+prediction model. The baseline model uses season-level KenPom stats as
+features and predicts game margins via regression (win probability is
+derived from predicted margin using a logistic function).
+
+Training set: ~91k games from 2010-2026 seasons. Pre-2010 data is in the
+DB but excluded from training because it lacks KenPom stats.
+
+
+Baseline (as of 2026-03-09)
+----------------------------
+Model: GradientBoostingRegressor (200 trees, max_depth=4)
+Features: 26 stats (all available team_stats except games_played)
+Margin MAE: 7.674
+Win accuracy: 80.0%
+Top feature: adj_efficiency_margin at 89% importance
+
+
+1. Feature Selection (2026-03-09)
+----------------------------------
+Experiment: Compare top 8 features vs all 26.
+Result: Top 8 = best accuracy (MAE 7.661, 80.03% win acc). All 26 slightly
+worse. Extra features add noise without improving predictions.
+
+Locked-in top 8: adj_efficiency_margin, pythag, avg_margin, win_pct,
+luck, sos, sos_offense, + neutral_site flag.
+
+
+2. Recent Form — Last 10 Games (2026-03-09)
+---------------------------------------------
+Experiment: Add rolling stats from each team's last 10 games.
+Result: 0.27% feature importance. No improvement. KenPom's ratings
+already incorporate recent performance implicitly.
+
+
+3. Roster Features (2026-03-09)
+--------------------------------
+Experiment: Add height, experience, continuity, and bench stats from
+KenPom's height endpoint.
+Result: <0.25% importance each. Completely redundant with KenPom
+efficiency ratings, which already reflect the impact of roster quality.
+
+
+4. Removing adj_efficiency_margin (2026-03-09)
+------------------------------------------------
+Experiment: Train the model without its dominant feature.
+Result: MAE 7.685 vs 7.674 (barely worse). pythag takes over at 79%
+importance. The model is fundamentally just learning "better KenPom
+rating wins" — it doesn't matter which KenPom-derived metric it uses.
+
+
+5. Point-in-Time Ratings (2026-03-09)
+---------------------------------------
+Experiment: Use KenPom archive ratings from the date of each game instead
+of end-of-season values. Built team_ratings_by_date table with ~2.87M
+historical ratings across 1,877 dates.
+Result: Worse — MAE 8.23, 77.5% win acc vs 7.66, 80.0%. Early-season
+PIT ratings are noisy and unreliable. End-of-season values are actually
+a better estimate of true team quality, even for early-season games.
+Infrastructure (build_training_data_pit) retained but not used.
+
+
+6. 30-Day AdjEM Delta / Momentum (2026-03-09)
+------------------------------------------------
+Experiment: Add the change in adj_efficiency_margin over the last 30 days
+as a momentum signal.
+Result: 0.29% importance. Trend information is redundant with the
+season-level efficiency values.
+
+
+7. AdjOE + AdjDE Split (2026-03-10)
+--------------------------------------
+Experiment: Replace adj_efficiency_margin (AdjOE - AdjDE) with separate
+adj_offensive_efficiency and adj_defensive_efficiency features. Hypothesis:
+the model could learn that matchups between good offense vs good defense
+play differently than similar overall margins.
+Result: No improvement. AdjOE at 0.7%, AdjDE at 0.5% importance. pythag
+takes over at 80%. MAE 7.67 vs 7.65. The offense/defense distinction
+doesn't help — team quality is effectively a single dimension.
+
+
+8. Rest Days (2026-03-10)
+---------------------------
+Experiment: Compute days since each team's last game from game dates in
+the DB. Feature = home_rest_days - away_rest_days, capped at 7.
+Result: 0.10% importance. Identical MAE. KenPom's efficiency ratings
+already account for scheduling effects indirectly (teams on tough
+schedules with short rest tend to have worse efficiency numbers).
+
+
+9. MLP vs GBM (2026-03-10)
+-----------------------------
+Experiment: Replace GradientBoostingRegressor with MLPRegressor (sklearn).
+Tested multiple configurations:
+
+  Model               | Features | MAE   | Win Acc
+  GBM                 | 8        | 7.652 | 80.05%
+  GBM                 | 25       | 7.663 | 79.98%
+  MLP (64-32)         | 8        | 7.605 | 80.25%
+  MLP (64-32)         | 25       | 7.616 | 80.18%
+  MLP (128-64-32)     | 25       | 7.625 | 80.11%
+
+Result: MLP (64-32) with 8 features is the best configuration. Slightly
+better accuracy than GBM and dramatically faster training (~10 sec vs
+~3.4 min). The 8-feature set remains best regardless of model type.
+Adopted MLP as the production model.
+
+
+10. Opponent Adjust — Barttorvik/Miya (2026-03-10)
+-----------------------------------------------------
+Experiment: Import "opponent_adjust" from Barttorvik Power Ratings (Miya).
+This metric measures how well a team performs above/below expectation
+against strong vs weak opponents ("playing up/down to competition").
+Data available 2010-2026 from CSV downloads.
+Result: 0.46% importance. MAE 7.60 vs 7.61 (within noise). The signal
+is already captured by the combination of efficiency + SOS + luck.
+Importer code retained for potential future use with other Miya stats.
+
+
+Summary & Conclusions
+-----------------------
+~80% win accuracy appears to be the ceiling for approaches based on
+team-level statistical features. KenPom's adj_efficiency_margin captures
+the vast majority of the predictive signal, and every additional stat-based
+feature tested has been redundant with it.
+
+Features tested and found redundant:
+- All 26 available KenPom + derived stats (only top 8 matter)
+- Recent form (last 10 games)
+- Roster composition (height, experience, continuity, bench)
+- Point-in-time ratings (noisier than end-of-season)
+- Momentum / 30-day rating change
+- Separate offense + defense efficiency (vs combined margin)
+- Rest days between games
+- Opponent adjustment (playing up/down to competition)
+
+Model changes that helped:
+- Switching from GBM to MLP: +0.2% win accuracy, 20x faster training
+- Fixing team ID duplicates: restored adj_efficiency_margin from 0.9%
+  to 89.5% importance (data quality issue, not a modeling improvement)
+
+Potential paths to break through 80%:
+- Vegas closing lines (market aggregates non-statistical information)
+- Injury/availability data (no good historical source found yet)
+- Tournament-specific context (seed matchup history, conference
+  tournament fatigue)
+- Fundamentally different approaches (player-level models, game
+  simulation)
