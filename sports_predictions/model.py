@@ -11,8 +11,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import cross_val_score
+from sklearn.neural_network import MLPRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from sports_predictions.db import get_db, resolve_team, DATA_DIR
 
@@ -223,9 +225,13 @@ def train_model(sport: str, seasons: list = None):
 
     def _train_regressor(y, label):
         """Train a regressor with CV and return (model, scores)."""
-        model = GradientBoostingRegressor(
-            n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42,
-        )
+        model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("mlp", MLPRegressor(
+                hidden_layer_sizes=(64, 32), max_iter=500,
+                random_state=42, early_stopping=True,
+            )),
+        ])
         scores = cross_val_score(
             model, X, y, cv=5, scoring="neg_mean_absolute_error"
         )
@@ -266,11 +272,17 @@ def train_model(sport: str, seasons: list = None):
         }, f)
     print(f"Models saved to {model_path}")
 
-    # Feature importance (from margin model)
-    print("\nFeature importance (margin model):")
-    for name, imp in sorted(zip(X.columns, margin_model.feature_importances_),
+    # Feature importance via permutation (from margin model)
+    from sklearn.inspection import permutation_importance
+    perm_imp = permutation_importance(
+        margin_model, X, y_margin, n_repeats=10, random_state=42,
+        scoring="neg_mean_absolute_error"
+    )
+    print("\nFeature importance (margin model, permutation):")
+    total_imp = perm_imp.importances_mean.sum()
+    for name, imp in sorted(zip(X.columns, perm_imp.importances_mean),
                             key=lambda x: -x[1]):
-        print(f"  {name}: {imp:.4f}")
+        print(f"  {name}: {imp / total_imp:.4f}")
 
     return margin_model, -margin_scores.mean()
 

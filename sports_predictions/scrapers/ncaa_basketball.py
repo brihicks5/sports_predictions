@@ -379,6 +379,74 @@ ESPN_SCOREBOARD_URL = (
     "/mens-college-basketball/scoreboard"
 )
 
+# ESPN shortDisplayName -> canonical team name mappings.
+# ESPN uses different abbreviations/names than Kaggle/KenPom.
+ESPN_NAME_OVERRIDES = {
+    "AR-Pine Bluff": "Arkansas Pine Bluff",
+    "Abilene Chrstn": "Abilene Christian",
+    "App State": "Appalachian St.",
+    "Bakersfield": "Cal St. Bakersfield",
+    "Ball State": "Ball St.",
+    "Bethune": "Bethune Cookman",
+    "Boston U": "Boston University",
+    "C Arkansas": "Central Arkansas",
+    "C Connecticut": "Central Connecticut",
+    "CA Baptist": "Cal Baptist",
+    "CSU Northridge": "CSUN",
+    "Coastal": "Coastal Carolina",
+    "Detroit Mercy": "Detroit",
+    "E Texas A&M": "East Texas A&M",
+    "FAU": "Florida Atlantic",
+    "FDU": "Fairleigh Dickinson",
+    "Fullerton": "Cal St. Fullerton",
+    "GA Southern": "Georgia Southern",
+    "Gardner-Webb": "Gardner Webb",
+    "Hawai\u2019i": "Hawaii",
+    "Hou Christian": "Houston Christian",
+    "IU Indy": "IUPUI",
+    "Iowa State": "Iowa St.",
+    "Jax State": "Jacksonville St.",
+    "Kennesaw St": "Kennesaw St.",
+    "Kent State": "Kent St.",
+    "LMU": "Loyola Marymount",
+    "Long Island": "LIU Brooklyn",
+    "MD Eastern": "Maryland Eastern Shore",
+    "McNeese": "McNeese St.",
+    "Miami": "Miami FL",
+    "Miss Valley St": "Mississippi Valley St.",
+    "Mount St Marys": "Mount St. Mary's",
+    "N Arizona": "Northern Arizona",
+    "N\u2019Western St": "Northwestern St.",
+    "Nicholls": "Nicholls St.",
+    "Ohio State": "Ohio St.",
+    "Ole Miss": "Mississippi",
+    "Omaha": "Nebraska Omaha",
+    "Penn State": "Penn St.",
+    "Pitt": "Pittsburgh",
+    "Purdue FW": "Purdue Fort Wayne",
+    "SC State": "South Carolina St.",
+    "SE Missouri": "Southeast Missouri",
+    "Sacramento St": "Sacramento St.",
+    "Saint Francis": "St. Francis PA",
+    "Sam Houston": "Sam Houston St.",
+    "San Jos\u00e9 St": "San Jose St.",
+    "Santa Barbara": "UC Santa Barbara",
+    "Seattle U": "Seattle",
+    "So Indiana": "Southern Indiana",
+    "St Thomas (MN)": "St. Thomas",
+    "Texas A&M Commerce": "East Texas A&M",
+    "Texas A&M-CC": "Texas A&M Corpus Chris",
+    "UAlbany": "Albany",
+    "UConn": "Connecticut",
+    "UIC": "Illinois Chicago",
+    "UL Monroe": "Louisiana Monroe",
+    "UMass": "Massachusetts",
+    "UT Martin": "Tennessee Martin",
+    "UT Rio Grande": "UT Rio Grande Valley",
+    "Utah State": "Utah St.",
+    "Western KY": "Western Kentucky",
+}
+
 
 def _date_to_season(date_str: str) -> int:
     """Convert a date string (YYYY-MM-DD) to NCAA season year.
@@ -431,6 +499,10 @@ def fetch_espn_games(date_str: str):
 
         home_name = home["team"]["shortDisplayName"]
         away_name = away["team"]["shortDisplayName"]
+
+        # Apply name overrides for known ESPN variants
+        home_name = ESPN_NAME_OVERRIDES.get(home_name, home_name)
+        away_name = ESPN_NAME_OVERRIDES.get(away_name, away_name)
 
         # Check if teams exist before creating — track truly new ones
         home_is_new = (conn.execute(
