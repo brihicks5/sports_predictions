@@ -482,6 +482,11 @@ def predict_game(sport: str, home_team: str, away_team: str,
     else:
         row["avg_tempo"] = 0.0
 
+    # Fetch injuries for both teams
+    from sports_predictions.db import get_team_injuries
+    home_injuries = get_team_injuries(conn, home_id)
+    away_injuries = get_team_injuries(conn, away_id)
+
     conn.close()
 
     X = pd.DataFrame([row])[feature_columns]
@@ -512,4 +517,6 @@ def predict_game(sport: str, home_team: str, away_team: str,
         "predicted_margin": round(pred_margin, 1),
         "predicted_home_score": round(pred_home_score),
         "predicted_away_score": round(pred_away_score),
+        "home_injuries": home_injuries,
+        "away_injuries": away_injuries,
     }

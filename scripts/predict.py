@@ -55,6 +55,28 @@ def main():
           f"{away} {result['predicted_away_score']}")
     print(f"    Margin: {abs(result['predicted_margin']):.1f} pts")
     print(f"\n  Predicted winner: {result['predicted_winner']}")
+
+    # Show injuries if any
+    home_injuries = result.get('home_injuries', [])
+    away_injuries = result.get('away_injuries', [])
+    if home_injuries or away_injuries:
+        print(f"\n  Injuries:")
+        for inj in home_injuries:
+            status = inj['status'].upper()
+            injury = inj.get('injury_type') or 'unknown'
+            ret = inj.get('expected_return') or ''
+            ret_str = f" ({ret})" if ret else ""
+            print(f"    {home}: {inj['player_name']} - "
+                  f"{status}, {injury}{ret_str}")
+        for inj in away_injuries:
+            status = inj['status'].upper()
+            injury = inj.get('injury_type') or 'unknown'
+            ret = inj.get('expected_return') or ''
+            ret_str = f" ({ret})" if ret else ""
+            print(f"    {away}: {inj['player_name']} - "
+                  f"{status}, {injury}{ret_str}")
+        print(f"\n  NOTE: Injuries are NOT factored into the prediction.")
+        print(f"  Use your judgment to adjust the margin accordingly.")
     print(f"{'='*50}")
 
 
