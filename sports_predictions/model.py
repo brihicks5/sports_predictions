@@ -30,6 +30,14 @@ FEATURE_STATS = [
     "sos_offense",
 ]
 
+# Point-in-time features looked up from team_ratings_by_date per game.
+# Maps db stat_name -> feature column name (to avoid collisions with
+# season-level stats that share the same name).
+PIT_FEATURES = {
+    "consensus_rank": "consensus_rank",
+    "adj_efficiency_margin": "pit_adj_efficiency_margin",
+}
+
 
 def _get_team_features(conn, team_id: int, season: int,
                        stat_names: list) -> dict:
@@ -41,6 +49,17 @@ def _get_team_features(conn, team_id: int, season: int,
         (team_id, season, *stat_names)
     ).fetchall()
     return {r["stat_name"]: r["stat_value"] for r in rows}
+
+
+def _get_team_pit_feature(conn, team_id: int, date: str,
+                          stat_name: str) -> float | None:
+    """Get a team's most recent point-in-time rating on or before a date."""
+    row = conn.execute("""
+        SELECT stat_value FROM team_ratings_by_date
+        WHERE team_id = ? AND stat_name = ? AND date <= ?
+        ORDER BY date DESC LIMIT 1
+    """, (team_id, stat_name, date)).fetchone()
+    return row["stat_value"] if row else None
 
 
 def _get_team_conference(conn, team_id: int) -> str:
@@ -115,6 +134,16 @@ def build_training_data(sport: str, seasons: list = None):
                 row[f"diff_{stat}"] = home_val - away_val
             row["neutral_site"] = game["neutral_site"]
 
+            # Point-in-time features (looked up by game date)
+            date_str = game["date"]
+            for db_stat, col_name in PIT_FEATURES.items():
+                h_val = _get_team_pit_feature(conn, hid, date_str, db_stat)
+                a_val = _get_team_pit_feature(conn, aid, date_str, db_stat)
+                if h_val is not None and a_val is not None:
+                    row[f"diff_{col_name}"] = h_val - a_val
+                else:
+                    row[f"diff_{col_name}"] = 0.0
+
             # Season month (how far into the season)
             date_str = game["date"]
             if date_str:
@@ -134,6 +163,23 @@ def build_training_data(sport: str, seasons: list = None):
             h_conf = _get_team_conference(conn, hid)
             a_conf = _get_team_conference(conn, aid)
             row["same_conference"] = 1 if (h_conf and h_conf == a_conf) else 0
+
+            # Average tempo (combined pace of both teams)
+            h_tempo = conn.execute(
+                "SELECT stat_value FROM team_stats "
+                "WHERE team_id=? AND season=? AND stat_name='adj_tempo'",
+                (hid, season)
+            ).fetchone()
+            a_tempo = conn.execute(
+                "SELECT stat_value FROM team_stats "
+                "WHERE team_id=? AND season=? AND stat_name='adj_tempo'",
+                (aid, season)
+            ).fetchone()
+            if h_tempo and a_tempo:
+                row["avg_tempo"] = (h_tempo["stat_value"]
+                                    + a_tempo["stat_value"]) / 2.0
+            else:
+                row["avg_tempo"] = 0.0
 
             X_rows.append(row)
             y_win_rows.append(
@@ -260,7 +306,8 @@ def train_model(sport: str, seasons: list = None):
     X, y_win, y_margin, y_total, feature_stats = build_training_data(
         sport, seasons
     )
-    print(f"Training on {len(X)} games with features: {feature_stats}")
+    print(f"Training on {len(X)} games with features: {feature_stats}"
+          f" + PIT: {PIT_FEATURES}")
 
     def _train_regressor(y, label):
         """Train a regressor with CV and return (model, scores)."""
@@ -384,10 +431,20 @@ def predict_game(sport: str, home_team: str, away_team: str,
         row[f"diff_{stat}"] = home_feats.get(stat, 0.0) - away_feats.get(stat, 0.0)
     row["neutral_site"] = int(neutral_site)
 
-    # Contextual features
-    # Season month: use current month or estimate from season
+    # Point-in-time features (use latest available)
     from datetime import date as date_cls
     today = date_cls.today()
+    today_str = today.isoformat()
+    for db_stat, col_name in PIT_FEATURES.items():
+        h_val = _get_team_pit_feature(conn, home_id, today_str, db_stat)
+        a_val = _get_team_pit_feature(conn, away_id, today_str, db_stat)
+        if h_val is not None and a_val is not None:
+            row[f"diff_{col_name}"] = h_val - a_val
+        else:
+            row[f"diff_{col_name}"] = 0.0
+
+    # Contextual features
+    # Season month: use current month or estimate from season
     row["season_month"] = _MONTH_TO_SEASON.get(today.month, 3)
 
     # Average games played by both teams this season
@@ -407,6 +464,23 @@ def predict_game(sport: str, home_team: str, away_team: str,
     h_conf = _get_team_conference(conn, home_id)
     a_conf = _get_team_conference(conn, away_id)
     row["same_conference"] = 1 if (h_conf and h_conf == a_conf) else 0
+
+    # Average tempo
+    h_tempo = conn.execute(
+        "SELECT stat_value FROM team_stats "
+        "WHERE team_id=? AND season=? AND stat_name='adj_tempo'",
+        (home_id, season)
+    ).fetchone()
+    a_tempo = conn.execute(
+        "SELECT stat_value FROM team_stats "
+        "WHERE team_id=? AND season=? AND stat_name='adj_tempo'",
+        (away_id, season)
+    ).fetchone()
+    if h_tempo and a_tempo:
+        row["avg_tempo"] = (h_tempo["stat_value"]
+                            + a_tempo["stat_value"]) / 2.0
+    else:
+        row["avg_tempo"] = 0.0
 
     conn.close()
 

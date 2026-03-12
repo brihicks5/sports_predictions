@@ -603,3 +603,203 @@ def compute_season_stats(season: int):
     conn.commit()
     conn.close()
     print(f"Computed season stats for {season}")
+
+
+def import_kaggle_rankings(csv_path: str, min_season: int = 2010):
+    """Import weekly consensus rankings from Kaggle's MMasseyOrdinals.csv.
+
+    For each team+date, computes the median ordinal rank across all
+    ranking systems. Stores as 'consensus_rank' in team_ratings_by_date
+    so it can be looked up at game time.
+    """
+    from collections import defaultdict
+    from statistics import median
+
+    teams_csv = Path(csv_path).parent / "MTeams.csv"
+
+    # Load Kaggle TeamID -> name mapping
+    team_names = {}
+    if teams_csv.exists():
+        with open(teams_csv) as f:
+            for row in csv.DictReader(f):
+                team_names[row["TeamID"]] = row["TeamName"]
+
+    # Read rankings: group by (season, day_num, kaggle_team_id) -> [ranks]
+    rankings = defaultdict(list)
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            season = int(row["Season"])
+            if season < min_season:
+                continue
+            key = (season, int(row["RankingDayNum"]), row["TeamID"])
+            rankings[key].append(int(row["OrdinalRank"]))
+
+    conn = get_db(SPORT)
+
+    # Resolve Kaggle team names to our DB team IDs (cache the mapping)
+    kaggle_to_db = {}
+    for kid, name in team_names.items():
+        from sports_predictions.db import resolve_team
+        tid = resolve_team(conn, name)
+        if tid:
+            kaggle_to_db[kid] = tid
+
+    changed = 0
+    total = 0
+    for (season, day_num, kaggle_tid), ranks in rankings.items():
+        db_tid = kaggle_to_db.get(kaggle_tid)
+        if not db_tid:
+            continue
+
+        date_str = kaggle_day_to_date(season, day_num)
+        consensus = median(ranks)
+
+        if upsert_team_rating_by_date(
+            conn, db_tid, date_str, "consensus_rank", consensus
+        ):
+            changed += 1
+        total += 1
+
+        if total % 10000 == 0:
+            conn.commit()
+
+    conn.commit()
+    conn.close()
+    print(f"Imported weekly consensus rankings: {changed} changed, "
+          f"{total} total team-date entries (seasons {min_season}+)")
+
+
+# Massey team name -> our DB name overrides (where names don't match)
+MASSEY_NAME_OVERRIDES = {
+    "Connecticut": "UConn",
+    "Miami FL": "Miami",
+    "St John's": "St John's",
+    "St Mary's CA": "St. Mary's",
+    "N Dakota St": "North Dakota St.",
+    "SF Austin": "SF Austin",
+    "TAM C. Christi": "Texas A&M Corpus Chris",
+    "CS Northridge": "Cal St. Northridge",
+    "CS Fullerton": "Cal St. Fullerton",
+    "CS Bakersfield": "Cal St. Bakersfield",
+    "CS Sacramento": "Sacramento St.",
+    "LIU Brooklyn": "LIU",
+    "UC Irvine": "UC Irvine",
+    "UC San Diego": "UC San Diego",
+    "UC Santa Barbara": "UC Santa Barbara",
+    "UC Davis": "UC Davis",
+    "UC Riverside": "UC Riverside",
+    "IL Chicago": "Ill. Chicago",
+    "St Louis": "Saint Louis",
+    "WI Green Bay": "Green Bay",
+    "WI Milwaukee": "Milwaukee",
+    "St Thomas MN": "St. Thomas (MN)",
+    "E Washington": "Eastern Washington",
+    "E Michigan": "Eastern Michigan",
+    "E Kentucky": "Eastern Kentucky",
+    "E Illinois": "Eastern Illinois",
+    "W Carolina": "Western Carolina",
+    "W Michigan": "Western Michigan",
+    "W Illinois": "Western Illinois",
+    "N Colorado": "Northern Colorado",
+    "N Illinois": "Northern Illinois",
+    "N Kentucky": "Northern Kentucky",
+    "S Illinois": "Southern Illinois",
+    "S Dakota St": "South Dakota St.",
+    "SE Missouri St": "Southeast Missouri St.",
+    "NE Omaha": "Nebraska Omaha",
+    "PFW": "Purdue Fort Wayne",
+    "SIUE": "SIU Edwardsville",
+    "MTSU": "Middle Tennessee",
+    "WKU": "Western Kentucky",
+    "UTRGV": "UT Rio Grande Valley",
+    "UTEP": "UT El Paso",
+    "FGCU": "Florida Gulf Coast",
+    "Col Charleston": "Charleston",
+    "MA Lowell": "UMass Lowell",
+    "UNC Wilmington": "UNC Wilmington",
+    "UNC Asheville": "UNC Asheville",
+    "UNC Greensboro": "UNC Greensboro",
+    "Cal Poly": "Cal Poly",
+    "UMBC": "UMBC",
+    "MD E Shore": "Maryland Eastern Shore",
+    "Ark Little Rock": "Little Rock",
+    "Ark Pine Bluff": "Arkansas Pine Bluff",
+    "MS Valley St": "Mississippi Valley St.",
+    "IUPUI": "IU Indianapolis",
+    "Missouri KC": "Kansas City",
+    "Loy Marymount": "Loyola Marymount",
+    "Northwestern LA": "Northwestern St.",
+    "St Peter's": "Saint Peter's",
+    "St Bonaventure": "St. Bonaventure",
+    "St Joseph's PA": "Saint Joseph's",
+    "East Texas A&M": "East Texas A&M",
+    "FL Atlantic": "Florida Atlantic",
+    "Florida Intl": "FIU",
+    "Ga Southern": "Georgia Southern",
+    "Charleston So": "Charleston Southern",
+    "Cent Arkansas": "Central Arkansas",
+    "Central Conn": "Central Connecticut",
+    "Mt St Mary's": "Mount St. Mary's",
+    "SC Upstate": "South Carolina Upstate",
+    "SE Louisiana": "Southeastern Louisiana",
+    "Southern Miss": "Southern Mississippi",
+}
+
+
+def import_massey_composite(csv_path: str, date_str: str, season: int):
+    """Import Massey Ratings composite rankings from a CSV file.
+
+    The CSV should have columns from masseyratings.com/ranks?s=cb including
+    Team and CMP (composite rank).
+
+    Args:
+        csv_path: Path to the CSV file with rankings.
+        date_str: Date for these rankings (YYYY-MM-DD).
+        season: Season year (e.g. 2026).
+    """
+    from sports_predictions.db import resolve_team
+
+    conn = get_db(SPORT)
+
+    changed = 0
+    total = 0
+    unmatched = []
+
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            team_name = row["Team"].strip()
+            try:
+                composite_rank = int(row["CMP"].strip())
+            except (ValueError, KeyError):
+                continue
+
+            # Try name override first, then raw name
+            db_name = MASSEY_NAME_OVERRIDES.get(team_name, team_name)
+            team_id = resolve_team(conn, db_name)
+
+            # If override didn't work, try raw name
+            if not team_id and db_name != team_name:
+                team_id = resolve_team(conn, team_name)
+
+            if not team_id:
+                unmatched.append(team_name)
+                continue
+
+            if upsert_team_rating_by_date(
+                conn, team_id, date_str, "consensus_rank", float(composite_rank)
+            ):
+                changed += 1
+            total += 1
+
+    conn.commit()
+    conn.close()
+
+    if unmatched:
+        print(f"Warning: {len(unmatched)} unmatched teams:")
+        for name in sorted(set(unmatched)):
+            print(f"  {name}")
+
+    print(f"Imported Massey composite for {date_str}: {changed} changed, "
+          f"{total} total teams")

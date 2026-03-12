@@ -209,18 +209,51 @@ MAE slightly worse (7.62 vs 7.59). A coach's impact is already reflected
 in the team's KenPom ratings.
 
 
+18. Point-in-Time Consensus Rank + PIT AdjEM (2026-03-11)
+-----------------------------------------------------------
+Experiment: Add two point-in-time (PIT) features looked up by game date from
+team_ratings_by_date, in addition to existing season-level stats:
+- consensus_rank: Median ordinal rank across ~60 ranking systems (Massey
+  composite). Historical data from Kaggle MMasseyOrdinals.csv (156k weekly
+  rankings, 2003-2026). Current data from masseyratings.com CSV export.
+- pit_adj_efficiency_margin: KenPom AdjEM on the date of each game, from
+  KenPom archive API (556k daily ratings, 2010-2026).
+
+These differ from experiment #5 (PIT ratings alone) because they supplement
+rather than replace the season-level features. The season-level stats capture
+true team quality; the PIT features add "how is this team ranked right now"
+context, which matters for early-season games and teams on hot/cold streaks.
+
+Result: Significant improvement — the best single-experiment gain recorded.
+  Metric         | Before  | After   | Change
+  Win accuracy   | 80.3%   | 81.7%   | +1.4%
+  Margin MAE     | 7.59    | 7.39    | -0.20
+
+Feature importances:
+  diff_consensus_rank:          10.1%
+  diff_pit_adj_efficiency_margin: 8.5%
+
+Unlike experiment #5, these PIT features are not redundant with season-level
+stats because they provide complementary information: consensus_rank aggregates
+60+ ranking systems (not just KenPom), and PIT AdjEM captures within-season
+trajectory that end-of-season values smooth out.
+
+Both features adopted into production model. Massey composite updated via
+CSV import; KenPom archive backfilled for all seasons 2010-2026.
+
+
 Summary & Conclusions
 -----------------------
-~80% win accuracy appears to be the ceiling for approaches based on
-team-level statistical features. KenPom's adj_efficiency_margin captures
-the vast majority of the predictive signal, and every additional stat-based
-feature tested has been redundant with it.
+~80% win accuracy was the ceiling for season-level statistical features alone.
+Adding point-in-time rankings (consensus rank + PIT AdjEM) broke through to
+81.7%, the first meaningful improvement beyond feature selection and model
+architecture changes.
 
 Features tested and found redundant:
 - All 26 available KenPom + derived stats (only top 8 matter)
 - Recent form (last 10 games)
 - Roster composition (height, experience, continuity, bench)
-- Point-in-time ratings (noisier than end-of-season)
+- Point-in-time KenPom ratings alone (noisier than season-level)
 - Momentum / 30-day rating change
 - Separate offense + defense efficiency (vs combined margin)
 - Rest days between games
@@ -231,13 +264,19 @@ Features tested and found redundant:
 - Tournament seed matchups (redundant with efficiency ratings)
 - Coach tenure / new coach indicator
 
+Features that helped:
+- PIT consensus rank (Massey composite): +10.1% importance, broke 80% ceiling
+- PIT AdjEM (KenPom archive): +8.5% importance, complementary to season-level
+- Contextual features (month, games played, conference): small but real gain
+
 Model changes that helped:
 - Switching from GBM to MLP: +0.2% win accuracy, 20x faster training
+- Adding PIT features: +1.4% win accuracy (80.3% → 81.7%), MAE 7.59 → 7.39
 - Fixing team ID duplicates: restored adj_efficiency_margin from 0.9%
   to 89.5% importance (data quality issue, not a modeling improvement)
 
-Potential paths to break through 80%:
+Potential paths to further improvement:
 - Vegas closing lines (market aggregates non-statistical information)
 - Injury/availability data (no good historical source found yet)
-- Fundamentally different approaches (player-level models, game
-  simulation)
+- Fundamentally different approaches (player-level models, game simulation)
+- More PIT features from other sources (e.g., individual system ranks)
