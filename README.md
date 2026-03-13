@@ -43,6 +43,26 @@ python scripts/predict.py "Duke" "North Carolina" --season 2026
 python scripts/predict.py "Duke" "North Carolina" --neutral  # neutral site
 ```
 
+### 5. Simulate the NCAA Tournament
+
+After Selection Sunday, fill in the bracket and run the Monte Carlo simulator:
+
+```bash
+# 1. Copy the template and fill in teams/seeds/regions
+cp bracket_template.json data/bracket.json
+# Edit data/bracket.json with the 68 teams
+
+# 2. Validate team names resolve correctly
+python scripts/simulate_tournament.py --validate-only
+
+# 3. Run the simulation
+python scripts/simulate_tournament.py -n 10000
+python scripts/simulate_tournament.py -n 10000 --seed 42    # reproducible
+python scripts/simulate_tournament.py -n 10000 --top 20     # top 20 only
+```
+
+The simulator uses the model's win probabilities (blended with Vegas when available) to play out the bracket thousands of times, then reports each team's probability of reaching each round.
+
 ## Data Refresh
 
 Run `scripts/update_data.py` to fetch ESPN games, refresh KenPom stats, and retrain the model:
@@ -79,18 +99,21 @@ Tests cover:
 sports_predictions/
 ├── sports_predictions/       # Python package
 │   ├── db.py                 # Generic SQLite schema (works for any sport)
-│   ├── model.py              # Gradient boosted margin + total regressors
+│   ├── model.py              # MLP margin + total regressors
+│   ├── odds.py               # ESPN pickcenter odds fetcher
 │   └── scrapers/
 │       └── ncaa_basketball.py  # Kaggle, KenPom, ESPN importers
 ├── scripts/
 │   ├── import_kaggle.py      # Bootstrap with historical data
 │   ├── update_data.py        # Nightly update script
 │   ├── fetch_games.py        # Fetch ESPN games by date/range
-│   ├── predict.py            # CLI for predictions
+│   ├── predict.py            # CLI for predictions (model + Vegas blending)
+│   ├── simulate_tournament.py # Monte Carlo bracket simulator
 │   ├── migrate_team_aliases.py  # One-time team deduplication
 │   └── migrate_dates.py       # One-time ordinal-to-ISO date conversion
 ├── tests/                    # Unit tests
-├── data/                     # SQLite DBs & models (gitignored)
+├── data/                     # SQLite DBs, models, bracket JSON (gitignored)
+├── bracket_template.json     # Tournament bracket template
 └── requirements.txt
 ```
 
