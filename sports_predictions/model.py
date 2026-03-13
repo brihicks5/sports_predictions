@@ -482,18 +482,28 @@ def predict_game(sport: str, home_team: str, away_team: str,
     else:
         row["avg_tempo"] = 0.0
 
-    # Fetch injuries for both teams
-    from sports_predictions.db import get_team_injuries
-    home_injuries = get_team_injuries(conn, home_id)
-    away_injuries = get_team_injuries(conn, away_id)
-
     conn.close()
 
     X = pd.DataFrame([row])[feature_columns]
 
-    # Predicted margin (home - away) and total
-    pred_margin = margin_model.predict(X)[0]
-    pred_total = total_model.predict(X)[0]
+    # Symmetrize: predict from both perspectives and average.
+    # MLPs are not guaranteed to satisfy f(-x) = -f(x), so predicting
+    # from both sides and averaging removes directional bias.
+    flipped_row = {}
+    for col in feature_columns:
+        if col.startswith("diff_"):
+            flipped_row[col] = -row[col]
+        else:
+            flipped_row[col] = row[col]
+    X_flip = pd.DataFrame([flipped_row])[feature_columns]
+
+    margin_fwd = margin_model.predict(X)[0]
+    margin_rev = margin_model.predict(X_flip)[0]
+    pred_margin = (margin_fwd - margin_rev) / 2.0
+
+    total_fwd = total_model.predict(X)[0]
+    total_rev = total_model.predict(X_flip)[0]
+    pred_total = (total_fwd + total_rev) / 2.0
 
     # Win probability derived from margin via logistic function
     home_win_prob = _logistic(pred_margin, margin_to_win_k)
@@ -515,8 +525,8 @@ def predict_game(sport: str, home_team: str, away_team: str,
         "away_win_prob": round(1 - home_win_prob, 4),
         "predicted_winner": home_team if home_win_prob > 0.5 else away_team,
         "predicted_margin": round(pred_margin, 1),
+        "predicted_total": round(pred_total, 1),
         "predicted_home_score": round(pred_home_score),
         "predicted_away_score": round(pred_away_score),
-        "home_injuries": home_injuries,
-        "away_injuries": away_injuries,
+        "margin_to_win_k": margin_to_win_k,
     }

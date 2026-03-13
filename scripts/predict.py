@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sports_predictions.model import predict_game
+from sports_predictions.odds import fetch_game_odds
 
 
 def main():
@@ -41,43 +43,109 @@ def main():
 
     home = result['home_team']
     away = result['away_team']
+    model_margin = result['predicted_margin']
+    model_total = result.get('predicted_total',
+                             result['predicted_home_score']
+                             + result['predicted_away_score'])
 
-    print(f"\n{'='*50}")
+    # Fetch Vegas odds
+    odds = fetch_game_odds(home, away)
+
+    # Blend model and Vegas if odds available
+    BLEND_WEIGHT = 0.5  # 0.5 = equal weight model and Vegas
+    if odds and "spread" in odds:
+        vegas_spread = odds["spread"]
+        blended_margin = (
+            (1 - BLEND_WEIGHT) * model_margin
+            + BLEND_WEIGHT * vegas_spread
+        )
+    else:
+        vegas_spread = None
+        blended_margin = model_margin
+
+    if odds and "total" in odds:
+        vegas_total = odds["total"]
+        blended_total = (
+            (1 - BLEND_WEIGHT) * model_total
+            + BLEND_WEIGHT * vegas_total
+        )
+    else:
+        vegas_total = None
+        blended_total = model_total
+
+    # Derive blended scores
+    rounded_margin = round(blended_margin)
+    rounded_total = round(blended_total)
+    if rounded_total % 2 != rounded_margin % 2:
+        rounded_total += 1
+    blended_home_score = (rounded_total + rounded_margin) // 2
+    blended_away_score = (rounded_total - rounded_margin) // 2
+
+    # Blended win probability (reuse model's logistic k)
+    k = result.get('margin_to_win_k')
+    if k:
+        blended_win_prob = 1.0 / (1.0 + math.exp(-k * blended_margin))
+    else:
+        blended_win_prob = result['home_win_prob']
+
+    print(f"\n{'='*55}")
     print(f"  {home} vs {away}")
     if args.neutral:
         print(f"  (Neutral site)")
-    print(f"{'='*50}")
-    print(f"\n  Win probability:")
-    print(f"    {home}: {result['home_win_prob']*100:.1f}%")
-    print(f"    {away}: {result['away_win_prob']*100:.1f}%")
-    print(f"\n  Predicted score:")
-    print(f"    {home} {result['predicted_home_score']} - "
-          f"{away} {result['predicted_away_score']}")
-    print(f"    Margin: {abs(result['predicted_margin']):.1f} pts")
-    print(f"\n  Predicted winner: {result['predicted_winner']}")
+    print(f"{'='*55}")
 
-    # Show injuries if any
-    home_injuries = result.get('home_injuries', [])
-    away_injuries = result.get('away_injuries', [])
-    if home_injuries or away_injuries:
-        print(f"\n  Injuries:")
-        for inj in home_injuries:
-            status = inj['status'].upper()
-            injury = inj.get('injury_type') or 'unknown'
-            ret = inj.get('expected_return') or ''
-            ret_str = f" ({ret})" if ret else ""
-            print(f"    {home}: {inj['player_name']} - "
-                  f"{status}, {injury}{ret_str}")
-        for inj in away_injuries:
-            status = inj['status'].upper()
-            injury = inj.get('injury_type') or 'unknown'
-            ret = inj.get('expected_return') or ''
-            ret_str = f" ({ret})" if ret else ""
-            print(f"    {away}: {inj['player_name']} - "
-                  f"{status}, {injury}{ret_str}")
-        print(f"\n  NOTE: Injuries are NOT factored into the prediction.")
-        print(f"  Use your judgment to adjust the margin accordingly.")
-    print(f"{'='*50}")
+    if vegas_spread is not None:
+        # Format spreads in standard betting notation: "TEAM -X.X"
+        def spread_str(margin, home_name, away_name):
+            if margin > 0:
+                return f"{home_name} -{abs(margin):.1f}"
+            elif margin < 0:
+                return f"{away_name} -{abs(margin):.1f}"
+            else:
+                return "PICK"
+
+        m_str = spread_str(model_margin, home, away)
+        v_str = spread_str(vegas_spread, home, away)
+        b_str = spread_str(blended_margin, home, away)
+
+        print(f"\n  {'':14s} {'Model':>18s} {'Vegas':>18s} {'Blended':>18s}")
+        print(f"  {'':14s} {'-----':>18s} {'-----':>18s} {'-------':>18s}")
+        print(f"  {'Spread':14s} {m_str:>18s} {v_str:>18s} {b_str:>18s}")
+
+        # Total
+        m_tot = f"{model_total:.1f}"
+        v_tot = f"{vegas_total:.1f}" if vegas_total else "n/a"
+        b_tot = f"{blended_total:.1f}"
+        print(f"  {'Total':14s} {m_tot:>18s} {v_tot:>18s} {b_tot:>18s}")
+
+        # Win prob
+        m_wp = f"{result['home_win_prob']*100:.1f}%"
+        b_wp = f"{blended_win_prob*100:.1f}%"
+        print(f"  {'Win prob':14s} {m_wp:>18s} {'':>18s} {b_wp:>18s}")
+
+        print(f"\n  Blended score: {home} {blended_home_score} - "
+              f"{away} {blended_away_score}")
+        print(f"  Blended winner: "
+              f"{home if blended_margin > 0 else away}")
+
+        # Flag big disagreements
+        diff = abs(model_margin - vegas_spread)
+        if diff >= 4:
+            print(f"\n  ** Model and Vegas disagree by {diff:.1f} pts **")
+    else:
+        # No odds available — show original output
+        print(f"\n  Win probability:")
+        print(f"    {home}: {result['home_win_prob']*100:.1f}%")
+        print(f"    {away}: {result['away_win_prob']*100:.1f}%")
+        print(f"\n  Predicted score:")
+        print(f"    {home} {result['predicted_home_score']} - "
+              f"{away} {result['predicted_away_score']}")
+        print(f"    Margin: {abs(result['predicted_margin']):.1f} pts")
+        print(f"\n  Predicted winner: {result['predicted_winner']}")
+        if odds is None:
+            print(f"\n  (No Vegas odds available — game may not be on today's slate)")
+
+    print(f"{'='*55}")
 
 
 if __name__ == "__main__":

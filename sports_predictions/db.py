@@ -80,21 +80,6 @@ def _ensure_schema(conn: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_team_ratings_by_date_lookup
             ON team_ratings_by_date(team_id, date, stat_name);
 
-        CREATE TABLE IF NOT EXISTS injuries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            team_id INTEGER NOT NULL REFERENCES teams(id),
-            player_name TEXT NOT NULL,
-            status TEXT NOT NULL,  -- out, doubtful, questionable, probable
-            injury_type TEXT,      -- ACL, ankle, concussion, etc.
-            detail TEXT,           -- free-text notes
-            date_reported TEXT,
-            expected_return TEXT,  -- date or description like 'season-ending'
-            updated_at TEXT DEFAULT (datetime('now')),
-            UNIQUE(team_id, player_name)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_injuries_team
-            ON injuries(team_id);
     """)
 
 
@@ -254,54 +239,3 @@ def upsert_team_rating_by_date(conn: sqlite3.Connection, team_id: int,
     return True
 
 
-def upsert_injury(conn: sqlite3.Connection, team_id: int, player_name: str,
-                   status: str, injury_type: str = None, detail: str = None,
-                   date_reported: str = None,
-                   expected_return: str = None) -> bool:
-    """Insert or update an injury for a player.
-
-    Returns True if inserted or changed, False if unchanged.
-    """
-    row = conn.execute(
-        "SELECT status, injury_type, detail, expected_return FROM injuries "
-        "WHERE team_id=? AND player_name=?",
-        (team_id, player_name)
-    ).fetchone()
-
-    if (row is not None
-            and row["status"] == status
-            and row["injury_type"] == injury_type
-            and row["detail"] == detail
-            and row["expected_return"] == expected_return):
-        return False
-
-    conn.execute("""
-        INSERT INTO injuries (team_id, player_name, status, injury_type,
-                             detail, date_reported, expected_return,
-                             updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        ON CONFLICT(team_id, player_name)
-        DO UPDATE SET status=excluded.status,
-                      injury_type=excluded.injury_type,
-                      detail=excluded.detail,
-                      date_reported=excluded.date_reported,
-                      expected_return=excluded.expected_return,
-                      updated_at=datetime('now')
-    """, (team_id, player_name, status, injury_type, detail,
-          date_reported, expected_return))
-    return True
-
-
-def clear_injuries(conn: sqlite3.Connection, team_id: int):
-    """Remove all injuries for a team (use before re-importing)."""
-    conn.execute("DELETE FROM injuries WHERE team_id=?", (team_id,))
-
-
-def get_team_injuries(conn: sqlite3.Connection, team_id: int) -> list:
-    """Get all active injuries for a team."""
-    rows = conn.execute(
-        "SELECT player_name, status, injury_type, detail, "
-        "date_reported, expected_return FROM injuries WHERE team_id=?",
-        (team_id,)
-    ).fetchall()
-    return [dict(r) for r in rows]
