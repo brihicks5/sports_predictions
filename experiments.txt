@@ -242,12 +242,88 @@ Both features adopted into production model. Massey composite updated via
 CSV import; KenPom archive backfilled for all seasons 2010-2026.
 
 
+19. MLP Architecture Upgrade: 256-128 (2026-03-12)
+-----------------------------------------------------
+Experiment: Increase MLP hidden layer sizes from (64, 32) to (256, 128) and
+add explicit L2 regularization (alpha=0.001). Hypothesis: larger network can
+capture more complex feature interactions while regularization prevents
+overfitting.
+Result: Small improvement. MAE 7.39 → 7.43 (within noise), win accuracy
+81.7% → 81.9%. Adopted as production architecture.
+
+
+20. Training Data Augmentation — Symmetry Mirroring (2026-03-12)
+-----------------------------------------------------------------
+Experiment: Double the training set by mirroring every game (flip home/away,
+negate margin). This forces f(x) = -f(-x) symmetry during training. Hypothesis:
+the model should predict the same margin regardless of which team is designated
+"home."
+Result: Much worse — MAE 7.43 → 8.30, win accuracy 81.9% → 77.8%. Mirroring
+non-neutral-site games teaches the model incorrect home court information (the
+flipped game has the wrong team as "home" but neutral_site=0). Only ~3% of
+games are neutral site, so 97% of mirrored examples have misleading labels.
+Reverted immediately.
+
+Fix adopted instead: predict from both perspectives at inference time and
+average: pred_margin = (f(x) - f(-x)) / 2. This enforces symmetry without
+corrupting training data.
+
+
+21. Variance / Uncertainty Model (2026-03-12)
+-----------------------------------------------
+Experiment: Train a secondary MLP to predict the expected absolute error of
+the margin model, giving per-game uncertainty estimates. Process:
+1. Get 5-fold cross-validated margin predictions on training data
+2. Compute absolute residuals: |actual_margin - cv_predicted_margin|
+3. Train a new MLP (128-64, alpha=0.001) to predict these residuals from
+   the same features
+
+Result: Uncertainty predictions range from ~5.5 to ~9.5 pts (mean ~7.4).
+Games with high model disagreement with Vegas AND low uncertainty are the
+highest-conviction ATS picks. Added to production model and predict.py output.
+
+Edge ratio metric: disagreement / uncertainty
+- > 0.6 → STRONG ATS pick
+- > 0.35 → LEAN ATS pick
+- < 0.35 → low conviction (model disagrees but isn't confident)
+
+
+22. Post-Hoc Margin Scaling (2026-03-12)
+------------------------------------------
+Experiment: Address margin compression (model pred std 10.14 vs actual 13.88)
+by scaling predictions by actual_std / pred_std = 1.368. Hypothesis: expanding
+the range would improve ATS performance by putting model margins on the same
+scale as Vegas lines.
+Result: Scaling worsens MAE significantly (7.40 → 8.21) while keeping win
+accuracy identical (81.5%). The compression is the model correctly predicting
+"true talent margin" — actual games have irreducible variance (buzzer beaters,
+hot shooting) that scaling can't capture. Scaling uniformly inflates all
+predictions, hurting close-game accuracy to marginally help on blowouts.
+Not adopted. The blended model+Vegas approach with edge ratio/uncertainty
+handles ATS assessment more intelligently.
+
+
+23. Vegas Odds Integration — ESPN Pickcenter (2026-03-12)
+-----------------------------------------------------------
+Not a model experiment per se, but a significant prediction pipeline addition.
+ESPN's pickcenter API (free, no auth) provides DraftKings spreads, totals, and
+moneylines for today's games. Predictions now blend model and Vegas 50/50 at
+prediction time and display side-by-side comparisons.
+
+Live test (2026-03-11, 14 conference tournament games):
+- Model ATS: 8/14 (57%) — slightly above coin flip
+- Model winners: 7/14 (50%) — below expected 81% (small sample)
+- Model tends to pick underdogs and predict tighter margins than Vegas
+  (margin compression), which the blending and edge ratio system mitigates.
+
+
 Summary & Conclusions
 -----------------------
+Current best model (2026-03-12): MLP (256-128), 81.9% win accuracy, 7.43 MAE.
+
 ~80% win accuracy was the ceiling for season-level statistical features alone.
 Adding point-in-time rankings (consensus rank + PIT AdjEM) broke through to
-81.7%, the first meaningful improvement beyond feature selection and model
-architecture changes.
+81.7%, and architecture/symmetry improvements pushed to 81.9%.
 
 Features tested and found redundant:
 - All 26 available KenPom + derived stats (only top 8 matter)
@@ -268,15 +344,24 @@ Features that helped:
 - PIT consensus rank (Massey composite): +10.1% importance, broke 80% ceiling
 - PIT AdjEM (KenPom archive): +8.5% importance, complementary to season-level
 - Contextual features (month, games played, conference): small but real gain
+- avg_tempo: huge improvement for total model (MAE 15.5 → 13.8)
 
-Model changes that helped:
+Model/pipeline changes that helped:
 - Switching from GBM to MLP: +0.2% win accuracy, 20x faster training
 - Adding PIT features: +1.4% win accuracy (80.3% → 81.7%), MAE 7.59 → 7.39
+- MLP 256-128 upgrade: 81.7% → 81.9% win accuracy
+- Symmetry fix (average both perspectives): ensures f(A,B) = -f(B,A)
+- Variance/uncertainty model: per-game confidence for ATS edge assessment
+- Vegas blending (ESPN pickcenter): 50/50 model+Vegas at prediction time
 - Fixing team ID duplicates: restored adj_efficiency_margin from 0.9%
   to 89.5% importance (data quality issue, not a modeling improvement)
 
+Approaches that didn't help:
+- Training data augmentation via mirroring (corrupts home court signal)
+- Post-hoc margin scaling (worsens MAE, compression is irreducible)
+
 Potential paths to further improvement:
-- Vegas closing lines (market aggregates non-statistical information)
-- Injury/availability data (no good historical source found yet)
+- Vegas closing lines (historical, for ATS-optimized model training)
+- Injury/availability data (no good free CBB source found)
 - Fundamentally different approaches (player-level models, game simulation)
 - More PIT features from other sources (e.g., individual system ranks)

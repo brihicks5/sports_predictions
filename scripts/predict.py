@@ -128,9 +128,39 @@ def main():
         print(f"  Blended winner: "
               f"{home if blended_margin > 0 else away}")
 
-        # Flag big disagreements
+        # Confidence and ATS assessment
+        uncertainty = result.get('uncertainty')
         diff = abs(model_margin - vegas_spread)
-        if diff >= 4:
+        if uncertainty is not None:
+            print(f"\n  Uncertainty: ±{uncertainty:.1f} pts")
+
+            # ATS edge assessment:
+            # Best ATS picks are when model disagrees with Vegas AND
+            # uncertainty is low relative to the disagreement.
+            if diff >= 2:
+                if model_margin > vegas_spread:
+                    edge_team = home
+                    edge_line = -vegas_spread
+                else:
+                    edge_team = away
+                    edge_line = vegas_spread
+
+                # Edge ratio: how much disagreement vs uncertainty
+                edge_ratio = diff / uncertainty
+                if edge_ratio > 0.6:
+                    strength = "STRONG"
+                elif edge_ratio > 0.35:
+                    strength = "LEAN"
+                else:
+                    strength = None
+
+                if strength:
+                    print(f"  ** ATS {strength}: {edge_team} {edge_line:+.1f} "
+                          f"(model disagrees by {diff:.1f} pts) **")
+                else:
+                    print(f"  Model and Vegas disagree by {diff:.1f} pts "
+                          f"(low conviction)")
+        elif diff >= 4:
             print(f"\n  ** Model and Vegas disagree by {diff:.1f} pts **")
     else:
         # No odds available — show original output
@@ -142,6 +172,9 @@ def main():
               f"{away} {result['predicted_away_score']}")
         print(f"    Margin: {abs(result['predicted_margin']):.1f} pts")
         print(f"\n  Predicted winner: {result['predicted_winner']}")
+        uncertainty = result.get('uncertainty')
+        if uncertainty is not None:
+            print(f"  Uncertainty: ±{uncertainty:.1f} pts")
         if odds is None:
             print(f"\n  (No Vegas odds available — game may not be on today's slate)")
 

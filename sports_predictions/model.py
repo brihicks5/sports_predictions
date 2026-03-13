@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_predict, cross_val_score
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -314,8 +314,8 @@ def train_model(sport: str, seasons: list = None):
         model = Pipeline([
             ("scaler", StandardScaler()),
             ("mlp", MLPRegressor(
-                hidden_layer_sizes=(64, 32), max_iter=500,
-                random_state=42, early_stopping=True,
+                hidden_layer_sizes=(256, 128), max_iter=500,
+                random_state=42, early_stopping=True, alpha=0.001,
             )),
         ])
         scores = cross_val_score(
@@ -332,6 +332,23 @@ def train_model(sport: str, seasons: list = None):
         total_future = executor.submit(_train_regressor, y_total, "Total")
         margin_model, margin_scores = margin_future.result()
         total_model, total_scores = total_future.result()
+
+    # Train variance model: predicts expected absolute error of margin model.
+    # Uses CV predictions to avoid overfitting (model can't see its own answers).
+    print("Training variance model...")
+    margin_cv_preds = cross_val_predict(margin_model, X, y_margin, cv=5)
+    margin_residuals = np.abs(y_margin - margin_cv_preds)
+    variance_model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("mlp", MLPRegressor(
+            hidden_layer_sizes=(128, 64), max_iter=500,
+            random_state=42, early_stopping=True, alpha=0.001,
+        )),
+    ])
+    variance_model.fit(X, margin_residuals)
+    var_preds = variance_model.predict(X)
+    print(f"Variance model range: {var_preds.min():.1f} to {var_preds.max():.1f} "
+          f"(mean {var_preds.mean():.1f})")
 
     # Derive logistic k from margin standard deviation
     # P(home_win | margin) = 1 / (1 + exp(-k * margin))
@@ -352,6 +369,7 @@ def train_model(sport: str, seasons: list = None):
         pickle.dump({
             "margin_model": margin_model,
             "total_model": total_model,
+            "variance_model": variance_model,
             "margin_to_win_k": margin_to_win_k,
             "feature_stats": feature_stats,
             "feature_columns": list(X.columns),
@@ -391,6 +409,7 @@ def predict_game(sport: str, home_team: str, away_team: str,
 
     margin_model = saved["margin_model"]
     total_model = saved["total_model"]
+    variance_model = saved.get("variance_model")
     margin_to_win_k = saved["margin_to_win_k"]
     feature_stats = saved["feature_stats"]
     feature_columns = saved["feature_columns"]
@@ -505,6 +524,14 @@ def predict_game(sport: str, home_team: str, away_team: str,
     total_rev = total_model.predict(X_flip)[0]
     pred_total = (total_fwd + total_rev) / 2.0
 
+    # Predicted uncertainty (expected absolute error of margin prediction)
+    if variance_model is not None:
+        var_fwd = variance_model.predict(X)[0]
+        var_rev = variance_model.predict(X_flip)[0]
+        pred_uncertainty = (var_fwd + var_rev) / 2.0
+    else:
+        pred_uncertainty = None
+
     # Win probability derived from margin via logistic function
     home_win_prob = _logistic(pred_margin, margin_to_win_k)
 
@@ -529,4 +556,5 @@ def predict_game(sport: str, home_team: str, away_team: str,
         "predicted_home_score": round(pred_home_score),
         "predicted_away_score": round(pred_away_score),
         "margin_to_win_k": margin_to_win_k,
+        "uncertainty": round(pred_uncertainty, 1) if pred_uncertainty else None,
     }
