@@ -43,7 +43,18 @@ python scripts/predict.py "Duke" "North Carolina" --season 2026
 python scripts/predict.py "Duke" "North Carolina" --neutral  # neutral site
 ```
 
-### 5. Simulate the NCAA Tournament
+### 5. Predict a full day's slate
+
+Fetches all games and Vegas lines from ESPN, runs the model, and flags ATS picks:
+
+```bash
+python scripts/predict_slate.py                    # today's games
+python scripts/predict_slate.py --date 2026-03-14  # specific date
+```
+
+Results are saved to `data/slates/YYYY-MM-DD.txt`.
+
+### 6. Simulate the NCAA Tournament
 
 After Selection Sunday, fill in the bracket and run the Monte Carlo simulator:
 
@@ -63,6 +74,18 @@ python scripts/simulate_tournament.py -n 10000 --top 20     # top 20 only
 
 The simulator uses the model's win probabilities (blended with Vegas when available) to play out the bracket thousands of times, then reports each team's probability of reaching each round.
 
+### 7. Backfill historical Vegas odds
+
+Scrapes ESPN's pickcenter for closing lines across historical seasons:
+
+```bash
+python -u scripts/backfill_odds.py --seasons 2023        # single season
+python -u scripts/backfill_odds.py --seasons 2018-2023   # range
+python -u scripts/backfill_odds.py --seasons 2015-2023 --delay 1.0  # slower
+```
+
+Resumes automatically — skips games that already have odds.
+
 ## Data Refresh
 
 Run `scripts/update_data.py` to fetch ESPN games, refresh KenPom stats, and retrain the model:
@@ -80,6 +103,31 @@ python scripts/update_data.py --season 2026 --skip-train    # skip model trainin
 ```
 
 Set this up as a cron job for nightly updates.
+
+## Model
+
+- **Architecture**: 2 MLP regressors (256-128 hidden layers) — one for margin, one for total points
+- **Features**: 7 KenPom stat diffs + neutral_site + 2 point-in-time features (consensus rank, adj efficiency margin) + avg_tempo
+- **Win probability**: Derived from predicted margin via logistic function
+- **Vegas blending**: Model predictions blended 50/50 with live ESPN odds when available
+- **Margin calibration**: Cross-validation calibration scale (~1.4x) corrects for margin compression when comparing to Vegas lines
+- **ATS picks**: Flagged when calibrated margin disagrees with Vegas by 5+ points, weighted by model uncertainty
+
+### Performance (2026 season)
+
+| Metric | Value |
+|--------|-------|
+| Win accuracy | 81.3% |
+| Margin MAE | 7.52 pts |
+| Total MAE | 13.78 pts |
+| Training time | ~10 sec |
+
+## Data Sources
+
+- **Kaggle**: March Machine Learning Mania dataset (1985-2026, ~200k games)
+- **KenPom**: Advanced metrics via REST API (2010-2026). Requires `KENPOM_API_TOKEN`.
+- **ESPN**: Free scoreboard API for current-season games and pickcenter odds (no auth needed)
+- **Massey Ratings**: Composite rankings from CSV export
 
 ## Testing
 
@@ -108,11 +156,14 @@ sports_predictions/
 │   ├── update_data.py        # Nightly update script
 │   ├── fetch_games.py        # Fetch ESPN games by date/range
 │   ├── predict.py            # CLI for predictions (model + Vegas blending)
+│   ├── predict_slate.py      # Batch predictions for a day's games
+│   ├── backfill_odds.py      # Historical Vegas odds scraper
 │   ├── simulate_tournament.py # Monte Carlo bracket simulator
 │   ├── migrate_team_aliases.py  # One-time team deduplication
 │   └── migrate_dates.py       # One-time ordinal-to-ISO date conversion
 ├── tests/                    # Unit tests
-├── data/                     # SQLite DBs, models, bracket JSON (gitignored)
+├── data/                     # SQLite DBs, models, slates, bracket JSON (gitignored)
+├── bets.md                   # ATS bet tracking
 ├── bracket_template.json     # Tournament bracket template
 └── requirements.txt
 ```

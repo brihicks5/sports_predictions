@@ -36,20 +36,23 @@ def main():
     )
     args = parser.parse_args()
 
+    # Fetch Vegas odds first so we can pass spread to predict_game
+    odds = fetch_game_odds(args.home_team, args.away_team)
+    vegas_spread_val = odds.get("spread") if odds else None
+
     result = predict_game(
         args.sport, args.home_team, args.away_team,
-        args.season, neutral_site=args.neutral
+        args.season, neutral_site=args.neutral,
+        vegas_spread=vegas_spread_val
     )
 
     home = result['home_team']
     away = result['away_team']
     model_margin = result['predicted_margin']
+    calibrated_margin = result.get('calibrated_margin', model_margin)
     model_total = result.get('predicted_total',
                              result['predicted_home_score']
                              + result['predicted_away_score'])
-
-    # Fetch Vegas odds
-    odds = fetch_game_odds(home, away)
 
     # Blend model and Vegas if odds available
     BLEND_WEIGHT = 0.5  # 0.5 = equal weight model and Vegas
@@ -118,6 +121,11 @@ def main():
         b_tot = f"{blended_total:.1f}"
         print(f"  {'Total':14s} {m_tot:>18s} {v_tot:>18s} {b_tot:>18s}")
 
+        # Winner
+        model_winner = home if model_margin > 0 else away
+        blended_winner = home if blended_margin > 0 else away
+        print(f"  {'Winner':14s} {model_winner:>18s} {'':>18s} {blended_winner:>18s}")
+
         # Win prob
         m_wp = f"{result['home_win_prob']*100:.1f}%"
         b_wp = f"{blended_win_prob*100:.1f}%"
@@ -125,43 +133,34 @@ def main():
 
         print(f"\n  Blended score: {home} {blended_home_score} - "
               f"{away} {blended_away_score}")
-        print(f"  Blended winner: "
-              f"{home if blended_margin > 0 else away}")
 
-        # Confidence and ATS assessment
         uncertainty = result.get('uncertainty')
-        diff = abs(model_margin - vegas_spread)
         if uncertainty is not None:
             print(f"\n  Uncertainty: ±{uncertainty:.1f} pts")
 
-            # ATS edge assessment:
-            # Best ATS picks are when model disagrees with Vegas AND
-            # uncertainty is low relative to the disagreement.
-            if diff >= 2:
-                if model_margin > vegas_spread:
-                    edge_team = home
-                    edge_line = -vegas_spread
-                else:
-                    edge_team = away
-                    edge_line = vegas_spread
+        # ATS model prediction
+        # ats_cover_margin: positive = home covers, negative = away covers
+        # vegas_spread here is margin convention (positive = home favored)
+        # For display: underdog gets + line, favorite gets - line
+        ats_cover = result.get('ats_cover_margin')
+        if ats_cover is not None:
+            if ats_cover > 0:
+                # Home covers — show home team with their line
+                edge_team = home
+                edge_line = -vegas_spread  # home line (neg when home fav)
+            else:
+                # Away covers — show away team with their line
+                edge_team = away
+                edge_line = vegas_spread  # away line (pos when home fav)
 
-                # Edge ratio: how much disagreement vs uncertainty
-                edge_ratio = diff / uncertainty
-                if edge_ratio > 0.6:
-                    strength = "STRONG"
-                elif edge_ratio > 0.35:
-                    strength = "LEAN"
-                else:
-                    strength = None
-
-                if strength:
-                    print(f"  ** ATS {strength}: {edge_team} {edge_line:+.1f} "
-                          f"(model disagrees by {diff:.1f} pts) **")
-                else:
-                    print(f"  Model and Vegas disagree by {diff:.1f} pts "
-                          f"(low conviction)")
-        elif diff >= 4:
-            print(f"\n  ** Model and Vegas disagree by {diff:.1f} pts **")
+            if abs(ats_cover) >= 3:
+                print(f"  ** ATS PICK: {edge_team} {edge_line:+.1f} "
+                      f"(cover margin: {ats_cover:+.1f}) **")
+            elif abs(ats_cover) >= 2:
+                print(f"  ** ATS LEAN: {edge_team} {edge_line:+.1f} "
+                      f"(cover margin: {ats_cover:+.1f}) **")
+            else:
+                print(f"  ATS: no edge (cover margin: {ats_cover:+.1f})")
     else:
         # No odds available — show original output
         print(f"\n  Win probability:")

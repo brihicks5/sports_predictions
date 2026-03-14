@@ -1,5 +1,7 @@
 """Fetch betting odds from ESPN's pickcenter (no API key needed)."""
 
+from datetime import date
+
 import requests
 
 from sports_predictions.db import get_db, resolve_team
@@ -12,6 +14,83 @@ ESPN_SUMMARY = (
     "https://site.api.espn.com/apis/site/v2/sports/basketball"
     "/mens-college-basketball/summary"
 )
+
+
+def fetch_slate(target_date: date = None) -> list[dict]:
+    """Fetch all games and odds for a given date from ESPN.
+
+    Returns list of dicts with keys: game_id, home, away, neutral,
+    spread, total, home_moneyline, away_moneyline, status.
+    Spread is from home team perspective (positive = home favored).
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    try:
+        resp = requests.get(ESPN_SCOREBOARD, params={
+            "groups": "50", "limit": "200",
+            "dates": target_date.strftime("%Y%m%d"),
+        }, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return []
+
+    events = resp.json().get("events", [])
+    games = []
+
+    for event in events:
+        comps = event.get("competitions", [])
+        if not comps:
+            continue
+        comp = comps[0]
+        competitors = comp.get("competitors", [])
+        if len(competitors) != 2:
+            continue
+
+        home_name = away_name = ""
+        home_score = away_score = None
+        for c in competitors:
+            team = c.get("team", {})
+            name = team.get("shortDisplayName", team.get("displayName", ""))
+            score = c.get("score")
+            if c.get("homeAway") == "home":
+                home_name = name
+                if score is not None:
+                    home_score = int(score)
+            else:
+                away_name = name
+                if score is not None:
+                    away_score = int(score)
+
+        neutral = comp.get("neutralSite", False)
+        status = comp.get("status", {}).get("type", {}).get("name", "")
+        game_id = event.get("id")
+
+        game = {
+            "game_id": game_id,
+            "home": home_name,
+            "away": away_name,
+            "neutral": neutral,
+            "status": status,
+            "home_score": home_score,
+            "away_score": away_score,
+        }
+
+        # Fetch odds from summary
+        try:
+            summary = requests.get(ESPN_SUMMARY, params={"event": game_id},
+                                   timeout=10)
+            summary.raise_for_status()
+            pickcenter = summary.json().get("pickcenter", [])
+            if pickcenter:
+                odds = _extract_odds(pickcenter[0], teams_flipped=False)
+                game.update(odds)
+        except requests.RequestException:
+            pass
+
+        games.append(game)
+
+    return games
 
 
 def fetch_game_odds(home_team: str, away_team: str,
@@ -39,8 +118,10 @@ def fetch_game_odds(home_team: str, away_team: str,
 
     # Fetch today's scoreboard to find the game
     try:
-        resp = requests.get(ESPN_SCOREBOARD, params={"groups": "50", "limit": "200"},
-                            timeout=10)
+        resp = requests.get(ESPN_SCOREBOARD, params={
+                                "groups": "50", "limit": "200",
+                                "dates": date.today().strftime("%Y%m%d"),
+                            }, timeout=10)
         resp.raise_for_status()
     except requests.RequestException:
         return None
@@ -173,9 +254,15 @@ def _extract_odds(pick: dict, teams_flipped: bool) -> dict:
         else:
             our_home_ml = ml_data.get("home", {}).get("close", {}).get("odds")
             our_away_ml = ml_data.get("away", {}).get("close", {}).get("odds")
-        if our_home_ml:
-            result["home_moneyline"] = int(our_home_ml)
-        if our_away_ml:
-            result["away_moneyline"] = int(our_away_ml)
+        try:
+            if our_home_ml:
+                result["home_moneyline"] = int(our_home_ml)
+        except (ValueError, TypeError):
+            pass
+        try:
+            if our_away_ml:
+                result["away_moneyline"] = int(our_away_ml)
+        except (ValueError, TypeError):
+            pass
 
     return result

@@ -70,16 +70,13 @@ def _get_team_conference(conn, team_id: int) -> str:
     return row["conference"] if row and row["conference"] else ""
 
 
-# Map calendar month to season progression (Nov=1 through Apr=6)
-_MONTH_TO_SEASON = {11: 1, 12: 2, 1: 3, 2: 4, 3: 5, 4: 6}
-
 
 def build_training_data(sport: str, seasons: list = None):
     """Build feature matrix from historical games.
 
     For each game, features are the difference between home team stats
     and away team stats (home - away), plus contextual features:
-    season_month, avg_games_played, same_conference.
+    avg_tempo.
 
     Returns X, y_win (1 if home won), y_margin (home - away score),
     y_total (total points), and feature_stats.
@@ -99,17 +96,16 @@ def build_training_data(sport: str, seasons: list = None):
     y_win_rows = []
     y_margin_rows = []
     y_total_rows = []
+    vegas_spreads = []  # For ATS model (None if no odds)
 
     for season in seasons:
         games = conn.execute("""
             SELECT home_team_id, away_team_id, home_score, away_score,
-                   neutral_site, date
+                   neutral_site, date, vegas_spread
             FROM games
             WHERE season = ? AND home_score IS NOT NULL
             ORDER BY date
         """, (season,)).fetchall()
-
-        games_played = {}  # team_id -> count
 
         for game in games:
             home_feats = _get_team_features(
@@ -144,26 +140,6 @@ def build_training_data(sport: str, seasons: list = None):
                 else:
                     row[f"diff_{col_name}"] = 0.0
 
-            # Season month (how far into the season)
-            date_str = game["date"]
-            if date_str:
-                month = int(date_str.split("-")[1])
-                row["season_month"] = _MONTH_TO_SEASON.get(month, 3)
-            else:
-                row["season_month"] = 3
-
-            # Average games played by both teams (team establishment)
-            h_gp = games_played.get(hid, 0)
-            a_gp = games_played.get(aid, 0)
-            row["avg_games_played"] = (h_gp + a_gp) / 2.0
-            games_played[hid] = h_gp + 1
-            games_played[aid] = a_gp + 1
-
-            # Same conference
-            h_conf = _get_team_conference(conn, hid)
-            a_conf = _get_team_conference(conn, aid)
-            row["same_conference"] = 1 if (h_conf and h_conf == a_conf) else 0
-
             # Average tempo (combined pace of both teams)
             h_tempo = conn.execute(
                 "SELECT stat_value FROM team_stats "
@@ -187,6 +163,7 @@ def build_training_data(sport: str, seasons: list = None):
             )
             y_margin_rows.append(game["home_score"] - game["away_score"])
             y_total_rows.append(game["home_score"] + game["away_score"])
+            vegas_spreads.append(game["vegas_spread"])
 
     conn.close()
 
@@ -194,7 +171,7 @@ def build_training_data(sport: str, seasons: list = None):
     y_win = np.array(y_win_rows)
     y_margin = np.array(y_margin_rows)
     y_total = np.array(y_total_rows)
-    return X, y_win, y_margin, y_total, feature_stats
+    return X, y_win, y_margin, y_total, feature_stats, vegas_spreads
 
 
 # Stats available from the KenPom archive endpoint (point-in-time)
@@ -303,9 +280,8 @@ def train_model(sport: str, seasons: list = None):
 
     Returns the margin model and cross-validation margin MAE.
     """
-    X, y_win, y_margin, y_total, feature_stats = build_training_data(
-        sport, seasons
-    )
+    X, y_win, y_margin, y_total, feature_stats, vegas_spreads = \
+        build_training_data(sport, seasons)
     print(f"Training on {len(X)} games with features: {feature_stats}"
           f" + PIT: {PIT_FEATURES}")
 
@@ -333,10 +309,20 @@ def train_model(sport: str, seasons: list = None):
         margin_model, margin_scores = margin_future.result()
         total_model, total_scores = total_future.result()
 
+    # Calibration: compute scale factor to match actual margin spread.
+    # Model margins are compressed (std ~10 vs actual ~14). For ATS picks,
+    # we scale predictions to match the actual distribution width.
+    print("Computing margin calibration...")
+    margin_cv_preds = cross_val_predict(margin_model, X, y_margin, cv=5)
+    pred_std = np.std(margin_cv_preds)
+    actual_std = np.std(y_margin)
+    margin_calibration_scale = actual_std / pred_std
+    print(f"Margin calibration: pred std={pred_std:.1f}, actual std={actual_std:.1f}, "
+          f"scale={margin_calibration_scale:.3f}")
+
     # Train variance model: predicts expected absolute error of margin model.
     # Uses CV predictions to avoid overfitting (model can't see its own answers).
     print("Training variance model...")
-    margin_cv_preds = cross_val_predict(margin_model, X, y_margin, cv=5)
     margin_residuals = np.abs(y_margin - margin_cv_preds)
     variance_model = Pipeline([
         ("scaler", StandardScaler()),
@@ -349,6 +335,107 @@ def train_model(sport: str, seasons: list = None):
     var_preds = variance_model.predict(X)
     print(f"Variance model range: {var_preds.min():.1f} to {var_preds.max():.1f} "
           f"(mean {var_preds.mean():.1f})")
+
+    # ATS model: predict cover margin using point-in-time features.
+    # Uses PIT stats (what was known at game time) rather than end-of-season
+    # stats, so the model learns real edges over Vegas rather than hindsight.
+    ats_model = None
+    ats_feature_columns = None
+    conn = get_db(sport)
+    ats_pit_stats = ARCHIVE_STATS + ["consensus_rank"]
+
+    games_with_odds = conn.execute("""
+        SELECT home_team_id, away_team_id, home_score, away_score,
+               neutral_site, date, vegas_spread
+        FROM games
+        WHERE vegas_spread IS NOT NULL AND home_score IS NOT NULL
+              AND season >= 2010
+        ORDER BY date
+    """).fetchall()
+
+    if len(games_with_odds) > 1000:
+        print(f"\nTraining ATS model on PIT features...")
+        ats_rows = []
+        y_cover_list = []
+
+        for game in games_with_odds:
+            hid = game["home_team_id"]
+            aid = game["away_team_id"]
+            date_str = game["date"]
+            spread = float(game["vegas_spread"])
+            margin = game["home_score"] - game["away_score"]
+
+            row = {}
+            skip = False
+            for stat in ats_pit_stats:
+                h_val = _get_team_pit_feature(conn, hid, date_str, stat)
+                a_val = _get_team_pit_feature(conn, aid, date_str, stat)
+                if h_val is not None and a_val is not None:
+                    row[f"diff_{stat}"] = h_val - a_val
+                else:
+                    skip = True
+                    break
+
+            if skip:
+                continue
+
+            # Average tempo (PIT)
+            h_tempo = _get_team_pit_feature(conn, hid, date_str, "adj_tempo")
+            a_tempo = _get_team_pit_feature(conn, aid, date_str, "adj_tempo")
+            row["avg_tempo"] = ((h_tempo + a_tempo) / 2.0
+                                if h_tempo and a_tempo else 0.0)
+
+            row["neutral_site"] = game["neutral_site"]
+            row["vegas_spread"] = spread
+
+            ats_rows.append(row)
+            # Cover margin: positive = home covered
+            y_cover_list.append(margin + spread)
+
+        X_ats = pd.DataFrame(ats_rows)
+        y_cover = np.array(y_cover_list)
+        ats_feature_columns = list(X_ats.columns)
+
+        print(f"  {len(X_ats)} games with PIT features + odds")
+
+        ats_model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("mlp", MLPRegressor(
+                hidden_layer_sizes=(256, 128), max_iter=500,
+                random_state=42, early_stopping=True, alpha=0.001,
+            )),
+        ])
+        ats_scores = cross_val_score(
+            ats_model, X_ats, y_cover, cv=5,
+            scoring="neg_mean_absolute_error"
+        )
+        print(f"  ATS cover MAE: {-ats_scores.mean():.2f} pts "
+              f"(+/- {ats_scores.std():.2f})")
+
+        naive_mae = np.mean(np.abs(y_cover))
+        print(f"  Naive baseline (predict 0): {naive_mae:.2f} pts")
+
+        ats_cv_preds = cross_val_predict(ats_model, X_ats, y_cover, cv=5)
+        non_push = y_cover != 0
+        ats_correct = ((ats_cv_preds[non_push] > 0)
+                       == (y_cover[non_push] > 0)).mean()
+        print(f"  ATS accuracy (CV): {ats_correct:.1%}")
+
+        # Accuracy at higher confidence
+        for thresh in [2, 3, 5]:
+            mask = non_push & (np.abs(ats_cv_preds) > thresh)
+            if mask.sum() > 0:
+                acc = ((ats_cv_preds[mask] > 0)
+                       == (y_cover[mask] > 0)).mean()
+                print(f"  ATS accuracy |pred|>{thresh}: "
+                      f"{acc:.1%} ({mask.sum()} games)")
+
+        ats_model.fit(X_ats, y_cover)
+    else:
+        print(f"\nSkipping ATS model: only {len(games_with_odds)} games "
+              f"with odds (need 1000+)")
+
+    conn.close()
 
     # Derive logistic k from margin standard deviation
     # P(home_win | margin) = 1 / (1 + exp(-k * margin))
@@ -370,7 +457,10 @@ def train_model(sport: str, seasons: list = None):
             "margin_model": margin_model,
             "total_model": total_model,
             "variance_model": variance_model,
+            "ats_model": ats_model,
+            "ats_feature_columns": ats_feature_columns,
             "margin_to_win_k": margin_to_win_k,
+            "margin_calibration_scale": margin_calibration_scale,
             "feature_stats": feature_stats,
             "feature_columns": list(X.columns),
         }, f)
@@ -392,11 +482,13 @@ def train_model(sport: str, seasons: list = None):
 
 
 def predict_game(sport: str, home_team: str, away_team: str,
-                 season: int, neutral_site: bool = False) -> dict:
+                 season: int, neutral_site: bool = False,
+                 vegas_spread: float = None) -> dict:
     """Predict the outcome of a game.
 
     Returns dict with win probabilities, predicted winner, predicted margin,
-    and predicted scores for each team.
+    and predicted scores for each team. If vegas_spread is provided and an
+    ATS model is available, includes ats_cover_margin prediction.
     """
     model_path = DATA_DIR / f"{sport}_model.pkl"
     if not model_path.exists():
@@ -410,7 +502,10 @@ def predict_game(sport: str, home_team: str, away_team: str,
     margin_model = saved["margin_model"]
     total_model = saved["total_model"]
     variance_model = saved.get("variance_model")
+    ats_model = saved.get("ats_model")
+    ats_feature_columns = saved.get("ats_feature_columns")
     margin_to_win_k = saved["margin_to_win_k"]
+    margin_calibration_scale = saved.get("margin_calibration_scale", 1.0)
     feature_stats = saved["feature_stats"]
     feature_columns = saved["feature_columns"]
 
@@ -461,28 +556,6 @@ def predict_game(sport: str, home_team: str, away_team: str,
             row[f"diff_{col_name}"] = h_val - a_val
         else:
             row[f"diff_{col_name}"] = 0.0
-
-    # Contextual features
-    # Season month: use current month or estimate from season
-    row["season_month"] = _MONTH_TO_SEASON.get(today.month, 3)
-
-    # Average games played by both teams this season
-    h_gp = conn.execute(
-        "SELECT COUNT(*) as c FROM games WHERE season = ? "
-        "AND (home_team_id = ? OR away_team_id = ?)",
-        (season, home_id, home_id)
-    ).fetchone()["c"]
-    a_gp = conn.execute(
-        "SELECT COUNT(*) as c FROM games WHERE season = ? "
-        "AND (home_team_id = ? OR away_team_id = ?)",
-        (season, away_id, away_id)
-    ).fetchone()["c"]
-    row["avg_games_played"] = (h_gp + a_gp) / 2.0
-
-    # Same conference
-    h_conf = _get_team_conference(conn, home_id)
-    a_conf = _get_team_conference(conn, away_id)
-    row["same_conference"] = 1 if (h_conf and h_conf == a_conf) else 0
 
     # Average tempo
     h_tempo = conn.execute(
@@ -545,6 +618,57 @@ def predict_game(sport: str, home_team: str, away_team: str,
     pred_home_score = (rounded_total + rounded_margin) // 2
     pred_away_score = (rounded_total - rounded_margin) // 2
 
+    # Calibrated margin: scaled to match actual margin distribution width.
+    # Use this for ATS comparison against Vegas, not the raw margin.
+    calibrated_margin = pred_margin * margin_calibration_scale
+
+    # ATS prediction: uses PIT features (what's known now) + vegas spread.
+    # vegas_spread comes in as margin convention (positive = home favored)
+    # but DB/ATS model uses betting line convention (negative = home favored).
+    ats_cover_margin = None
+    ats_vegas = -vegas_spread if vegas_spread is not None else None
+    if ats_vegas is not None and ats_model is not None:
+        conn2 = get_db(sport)
+        ats_pit_stats = ARCHIVE_STATS + ["consensus_rank"]
+        ats_row = {}
+        ats_ok = True
+        for stat in ats_pit_stats:
+            h_val = _get_team_pit_feature(conn2, home_id, today_str, stat)
+            a_val = _get_team_pit_feature(conn2, away_id, today_str, stat)
+            if h_val is not None and a_val is not None:
+                ats_row[f"diff_{stat}"] = h_val - a_val
+            else:
+                ats_ok = False
+                break
+
+        if ats_ok:
+            h_tempo = _get_team_pit_feature(
+                conn2, home_id, today_str, "adj_tempo")
+            a_tempo = _get_team_pit_feature(
+                conn2, away_id, today_str, "adj_tempo")
+            ats_row["avg_tempo"] = ((h_tempo + a_tempo) / 2.0
+                                    if h_tempo and a_tempo else 0.0)
+            ats_row["neutral_site"] = int(neutral_site)
+            ats_row["vegas_spread"] = ats_vegas
+
+            X_ats = pd.DataFrame([ats_row])[ats_feature_columns]
+
+            ats_flipped = {}
+            for col in ats_feature_columns:
+                if col.startswith("diff_"):
+                    ats_flipped[col] = -ats_row[col]
+                elif col == "vegas_spread":
+                    ats_flipped[col] = -ats_vegas
+                else:
+                    ats_flipped[col] = ats_row[col]
+            X_ats_flip = pd.DataFrame([ats_flipped])[ats_feature_columns]
+
+            cover_fwd = ats_model.predict(X_ats)[0]
+            cover_rev = ats_model.predict(X_ats_flip)[0]
+            ats_cover_margin = (cover_fwd - cover_rev) / 2.0
+
+        conn2.close()
+
     return {
         "home_team": home_team,
         "away_team": away_team,
@@ -552,9 +676,11 @@ def predict_game(sport: str, home_team: str, away_team: str,
         "away_win_prob": round(1 - home_win_prob, 4),
         "predicted_winner": home_team if home_win_prob > 0.5 else away_team,
         "predicted_margin": round(pred_margin, 1),
+        "calibrated_margin": round(calibrated_margin, 1),
         "predicted_total": round(pred_total, 1),
         "predicted_home_score": round(pred_home_score),
         "predicted_away_score": round(pred_away_score),
         "margin_to_win_k": margin_to_win_k,
         "uncertainty": round(pred_uncertainty, 1) if pred_uncertainty else None,
+        "ats_cover_margin": round(ats_cover_margin, 1) if ats_cover_margin is not None else None,
     }

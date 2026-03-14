@@ -82,6 +82,19 @@ def _ensure_schema(conn: sqlite3.Connection):
 
     """)
 
+    # Add odds columns to games table (migration for existing DBs)
+    for col, col_type in [
+        ("vegas_spread", "REAL"),
+        ("vegas_total", "REAL"),
+        ("vegas_home_ml", "INTEGER"),
+        ("vegas_away_ml", "INTEGER"),
+        ("odds_provider", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE games ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
 
 def resolve_team(conn: sqlite3.Connection, name: str) -> int | None:
     """Look up a team by alias or canonical name. Returns team id or None."""
