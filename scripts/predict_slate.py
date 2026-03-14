@@ -133,6 +133,7 @@ def main():
             "model": spread_str(model_margin, home, away),
             "vegas": spread_str(vegas_spread, home, away) if vegas_spread is not None else "n/a",
             "win_prob": f"{max(win_prob, 1-win_prob)*100:.0f}%",
+            "ats_cover": f"{ats_cover:+.1f}" if ats_cover is not None else "",
             "ats": ats,
             "score": score_str,
             "winner_result": winner_result,
@@ -144,9 +145,9 @@ def main():
         return
 
     # Print table
-    headers = ["Game", "Model", "Vegas", "Win%", "ATS Pick", "Result", "Win?", "ATS?"]
-    rows = [[r["game"], r["model"], r["vegas"], r["win_prob"], r["ats"],
-             r["score"], r["winner_result"], r["ats_result"]]
+    headers = ["Game", "Model", "Vegas", "Win%", "Cover", "ATS Pick", "Result", "Win?", "ATS?"]
+    rows = [[r["game"], r["model"], r["vegas"], r["win_prob"], r["ats_cover"],
+             r["ats"], r["score"], r["winner_result"], r["ats_result"]]
             for r in results]
 
     widths = [len(h) for h in headers]

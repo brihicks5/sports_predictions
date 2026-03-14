@@ -16,3 +16,16 @@
 ---
 
 **Running Total: 2-4, -$11.89**
+
+## 2026-03-14
+
+| Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
+|------|-------------|-------------|-----|------|--------|--------|-----|
+| Wisconsin vs Michigan (N) | Michigan -4.8 | Michigan -12.5 | Wisconsin +12.5 | -110 | $4.06 | | |
+| Vanderbilt vs Florida (N) | Florida -3.0 | Florida -7.5 | Vanderbilt +6.5 | -110 | $4.05 | | |
+
+**Daily: 0-0 (2 pending), $0.00**
+
+---
+
+**Running Total: 2-4, -$11.89**
