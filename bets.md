@@ -21,11 +21,27 @@
 
 | Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
 |------|-------------|-------------|-----|------|--------|--------|-----|
-| Wisconsin vs Michigan (N) | Michigan -4.8 | Michigan -12.5 | Wisconsin +12.5 | -110 | $4.06 | | |
-| Vanderbilt vs Florida (N) | Florida -3.0 | Florida -7.5 | Vanderbilt +6.5 | -110 | $4.05 | | |
+| Wisconsin vs Michigan (N) | Michigan -4.8 | Michigan -12.5 | Wisconsin +12.5 | -110 | $4.06 | WIN (68-65 Michigan) | +$3.69 |
+| Vanderbilt vs Florida (N) | Florida -3.0 | Florida -7.5 | Vanderbilt +6.5 | -110 | $4.05 | WIN (91-74 Vanderbilt) | +$3.68 |
+| Houston vs Arizona (N) | Arizona -1.7 | Arizona -1.5 | Arizona -1.5 | -118 | $5 | WIN (79-74 Arizona) | +$4.24 |
+| Virginia vs Duke (N) | Duke -3.1 | Duke -7.5 | Virginia +8.5 | -148 | $5 | WIN (70-74 Duke) | +$3.38 |
 
-**Daily: 0-0 (2 pending), $0.00**
+**Daily: 4-0, +$14.99**
 
 ---
 
-**Running Total: 2-4, -$11.89**
+**Running Total: 6-4, +$3.10**
+
+## 2026-03-15
+
+| Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
+|------|-------------|-------------|-----|------|--------|--------|-----|
+| Vanderbilt vs Arkansas (N) | Vanderbilt -2.0 | Vanderbilt -2.5 | Vanderbilt -2.5 | +100 | $5 | | |
+| Wichita St vs South Florida (N) | South Florida -1.2 | South Florida -6.5 | Wichita St +6.5 | -115 | $5 | | |
+| Purdue vs Michigan (N) | Michigan -1.6 | Michigan -5.5 | Michigan -3.5 | -149 | $5 | | |
+
+**Daily: 0-0 (3 pending), $0.00**
+
+---
+
+**Running Total: 6-4 (3 pending), +$3.10**
