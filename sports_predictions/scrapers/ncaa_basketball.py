@@ -378,6 +378,10 @@ ESPN_SCOREBOARD_URL = (
     "https://site.api.espn.com/apis/site/v2/sports/basketball"
     "/mens-college-basketball/scoreboard"
 )
+ESPN_SUMMARY_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball"
+    "/mens-college-basketball/summary"
+)
 
 # ESPN shortDisplayName -> canonical team name mappings.
 # ESPN uses different abbreviations/names than Kaggle/KenPom.
@@ -460,6 +464,55 @@ def _date_to_season(date_str: str) -> int:
     return dt.year
 
 
+def _extract_espn_odds(pick: dict) -> dict:
+    """Extract odds from ESPN pickcenter data for storage.
+
+    Returns kwargs suitable for upsert_game(). Spread is from the home team
+    perspective (positive = home favored), matching our model convention.
+    ESPN's spread is negative when home is favored, so we negate it.
+    """
+    result = {}
+
+    # Spread
+    spread_data = pick.get("pointSpread", {})
+    if spread_data:
+        home_line = spread_data.get("home", {}).get("close", {}).get("line")
+        if home_line is not None:
+            result["vegas_spread"] = -float(home_line)
+    if "vegas_spread" not in result and "spread" in pick:
+        result["vegas_spread"] = -float(pick["spread"])
+
+    # Total
+    total_data = pick.get("total", {})
+    if total_data:
+        over_line = total_data.get("over", {}).get("close", {}).get("line", "")
+        if over_line:
+            result["vegas_total"] = float(str(over_line).lstrip("oO"))
+    if "vegas_total" not in result and "overUnder" in pick:
+        result["vegas_total"] = float(pick["overUnder"])
+
+    # Moneyline
+    ml_data = pick.get("moneyline", {})
+    if ml_data:
+        home_ml = ml_data.get("home", {}).get("close", {}).get("odds")
+        away_ml = ml_data.get("away", {}).get("close", {}).get("odds")
+        try:
+            if home_ml:
+                result["vegas_home_ml"] = int(home_ml)
+        except (ValueError, TypeError):
+            pass
+        try:
+            if away_ml:
+                result["vegas_away_ml"] = int(away_ml)
+        except (ValueError, TypeError):
+            pass
+
+    if result:
+        result["odds_provider"] = pick.get("provider", {}).get("name", "unknown")
+
+    return result
+
+
 def fetch_espn_games(date_str: str):
     """Fetch completed game results from ESPN for a given date.
 
@@ -531,8 +584,23 @@ def fetch_espn_games(date_str: str):
         away_score = int(away["score"])
         neutral = comp.get("neutralSite", False)
 
+        # Fetch odds from ESPN summary/pickcenter
+        odds_kwargs = {}
+        game_id = event.get("id")
+        if game_id:
+            try:
+                summary = requests.get(ESPN_SUMMARY_URL,
+                                       params={"event": game_id}, timeout=10)
+                summary.raise_for_status()
+                pickcenter = summary.json().get("pickcenter", [])
+                if pickcenter:
+                    odds_kwargs = _extract_espn_odds(pickcenter[0])
+            except requests.RequestException:
+                pass
+
         if upsert_game(conn, season, date_str, home_id, away_id,
-                        home_score, away_score, neutral_site=neutral):
+                        home_score, away_score, neutral_site=neutral,
+                        **odds_kwargs):
             changed += 1
         total += 1
 
@@ -768,6 +836,8 @@ def import_massey_composite(csv_path: str, date_str: str, season: int):
 
     with open(csv_path) as f:
         reader = csv.DictReader(f)
+        # Strip whitespace from header names (some exports have " CMP" etc.)
+        reader.fieldnames = [name.strip() for name in reader.fieldnames]
         for row in reader:
             team_name = row["Team"].strip()
             try:

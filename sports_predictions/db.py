@@ -170,13 +170,18 @@ def get_or_create_team(conn: sqlite3.Connection, name: str,
 def upsert_game(conn: sqlite3.Connection, season: int, date: str,
                  home_team_id: int, away_team_id: int,
                  home_score: int, away_score: int,
-                 neutral_site: bool = False, postseason: bool = False) -> bool:
+                 neutral_site: bool = False, postseason: bool = False,
+                 vegas_spread: float = None, vegas_total: float = None,
+                 vegas_home_ml: int = None, vegas_away_ml: int = None,
+                 odds_provider: str = None) -> bool:
     """Insert or update a game result.
 
     Returns True if the row was inserted or changed, False if unchanged.
     """
     row = conn.execute(
-        "SELECT home_score, away_score, neutral_site, postseason FROM games "
+        "SELECT home_score, away_score, neutral_site, postseason, "
+        "vegas_spread, vegas_total, vegas_home_ml, vegas_away_ml, odds_provider "
+        "FROM games "
         "WHERE season=? AND date=? AND home_team_id=? AND away_team_id=?",
         (season, date, home_team_id, away_team_id)
     ).fetchone()
@@ -185,20 +190,34 @@ def upsert_game(conn: sqlite3.Connection, season: int, date: str,
             and row["home_score"] == home_score
             and row["away_score"] == away_score
             and row["neutral_site"] == int(neutral_site)
-            and row["postseason"] == int(postseason)):
+            and row["postseason"] == int(postseason)
+            and row["vegas_spread"] == vegas_spread
+            and row["vegas_total"] == vegas_total
+            and row["vegas_home_ml"] == vegas_home_ml
+            and row["vegas_away_ml"] == vegas_away_ml
+            and row["odds_provider"] == odds_provider):
         return False
 
     conn.execute("""
         INSERT INTO games (season, date, home_team_id, away_team_id,
-                          home_score, away_score, neutral_site, postseason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                          home_score, away_score, neutral_site, postseason,
+                          vegas_spread, vegas_total, vegas_home_ml,
+                          vegas_away_ml, odds_provider)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(season, date, home_team_id, away_team_id)
         DO UPDATE SET home_score=excluded.home_score,
                       away_score=excluded.away_score,
                       neutral_site=excluded.neutral_site,
-                      postseason=excluded.postseason
+                      postseason=excluded.postseason,
+                      vegas_spread=excluded.vegas_spread,
+                      vegas_total=excluded.vegas_total,
+                      vegas_home_ml=excluded.vegas_home_ml,
+                      vegas_away_ml=excluded.vegas_away_ml,
+                      odds_provider=excluded.odds_provider
     """, (season, date, home_team_id, away_team_id,
-          home_score, away_score, int(neutral_site), int(postseason)))
+          home_score, away_score, int(neutral_site), int(postseason),
+          vegas_spread, vegas_total, vegas_home_ml, vegas_away_ml,
+          odds_provider))
     return True
 
 

@@ -17,8 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sports_predictions.scrapers.ncaa_basketball import (
-    compute_season_stats, fetch_espn_games, fetch_kenpom_four_factors,
-    fetch_kenpom_ratings
+    compute_season_stats, fetch_espn_games, fetch_kenpom_archive_date,
+    fetch_kenpom_four_factors, fetch_kenpom_ratings
 )
 from sports_predictions.model import train_model
 
@@ -70,6 +70,12 @@ def main():
 
         print("\n--- Fetching KenPom four-factors ---")
         kenpom_changed += fetch_kenpom_four_factors(args.season)
+
+        print("\n--- Fetching KenPom archive (PIT ratings) ---")
+        for d in [yesterday, today]:
+            archive_changed = fetch_kenpom_archive_date(d)
+            if archive_changed > 0:
+                kenpom_changed += archive_changed
 
         if kenpom_changed > 0:
             data_changed = True
