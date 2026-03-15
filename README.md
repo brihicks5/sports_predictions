@@ -50,9 +50,10 @@ Fetches all games and Vegas lines from ESPN, runs the model, and flags ATS picks
 ```bash
 python scripts/predict_slate.py                    # today's games
 python scripts/predict_slate.py --date 2026-03-14  # specific date
+python scripts/predict_slate.py --date 2026-03-14 --results-only  # fill in scores only
 ```
 
-Results are saved to `data/slates/YYYY-MM-DD.txt`.
+Results are saved to `data/slates/YYYY-MM-DD.txt`. Use `--results-only` to update an existing slate with final scores without re-running predictions.
 
 ### 6. Simulate the NCAA Tournament
 
@@ -106,12 +107,13 @@ Set this up as a cron job for nightly updates.
 
 ## Model
 
-- **Architecture**: 2 MLP regressors (256-128 hidden layers) — one for margin, one for total points
-- **Features**: 7 KenPom stat diffs + neutral_site + 2 point-in-time features (consensus rank, adj efficiency margin) + avg_tempo
+- **Architecture**: 3 MLP regressors — margin (64-32), total (64-32), and ATS/cover (256-128)
+- **Features**: 7 KenPom stat diffs + neutral_site + 2 point-in-time features (consensus rank, adj efficiency margin) + same_conference + avg_tempo
 - **Win probability**: Derived from predicted margin via logistic function
 - **Vegas blending**: Model predictions blended 50/50 with live ESPN odds when available
+- **Vegas odds persistence**: ESPN pickcenter odds (spread, total, moneyline) stored in DB during game fetch
 - **Margin calibration**: Cross-validation calibration scale (~1.4x) corrects for margin compression when comparing to Vegas lines
-- **ATS picks**: Flagged when calibrated margin disagrees with Vegas by 5+ points, weighted by model uncertainty
+- **ATS model**: Dedicated model predicts cover margin using PIT features + Vegas spread; picks flagged at |cover| >= 2 (lean) or >= 3 (pick)
 
 ### Performance (2026 season)
 

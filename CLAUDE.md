@@ -11,7 +11,9 @@ NCAA basketball (and eventually other sports) game outcome prediction using hist
 ## Common Commands
 - **Always activate the venv first**: `source venv/bin/activate`
 - `python scripts/predict.py "Team A" "Team B" --season 2026` — predict a game
-- `python scripts/update_data.py --season 2026` — refresh KenPom + retrain
+- `python scripts/predict_slate.py --date 2026-03-14` — predict a full day's slate
+- `python scripts/predict_slate.py --date 2026-03-14 --results-only` — fill in scores without re-predicting
+- `python scripts/update_data.py --season 2026` — refresh ESPN games, KenPom, and retrain
 - `python scripts/import_kaggle.py` — one-time bulk import from Kaggle
 
 ## Code Conventions
