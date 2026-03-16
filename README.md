@@ -108,7 +108,7 @@ Run `scripts/update_data.py` to fetch ESPN games, refresh KenPom stats, and retr
 python scripts/update_data.py --season 2026
 ```
 
-The script automatically skips model retraining when no new data is detected (no new ESPN games and no KenPom stat changes). You can also control behavior with flags:
+The script always retrains the model after fetching data. You can control behavior with flags:
 
 ```bash
 python scripts/update_data.py --season 2026 --skip-espn     # skip ESPN fetch
@@ -152,7 +152,7 @@ python -m pytest tests/ -v
 ```
 
 Tests cover:
-- **update_data** — skip-training logic, CLI flag combinations
+- **update_data** — training behavior, CLI flag combinations
 - **db** — upsert change detection, game inserts, team resolution/dedup
 - **scrapers** — NCAA season date mapping, Kaggle ordinal-to-ISO conversion
 
