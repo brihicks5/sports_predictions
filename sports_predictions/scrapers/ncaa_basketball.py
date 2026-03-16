@@ -406,6 +406,7 @@ ESPN_NAME_OVERRIDES = {
     "GA Southern": "Georgia Southern",
     "Gardner-Webb": "Gardner Webb",
     "Hawai\u2019i": "Hawaii",
+    "Hawai'i": "Hawaii",
     "Hou Christian": "Houston Christian",
     "IU Indy": "IUPUI",
     "Iowa State": "Iowa St.",

@@ -57,23 +57,36 @@ Results are saved to `data/slates/YYYY-MM-DD.txt`. Use `--results-only` to updat
 
 ### 6. Simulate the NCAA Tournament
 
-After Selection Sunday, fill in the bracket and run the Monte Carlo simulator:
+After Selection Sunday, fetch the bracket from ESPN and run simulations:
 
 ```bash
-# 1. Copy the template and fill in teams/seeds/regions
-cp bracket_template.json data/bracket.json
-# Edit data/bracket.json with the 68 teams
+# 1. Fetch bracket from ESPN (teams, seeds, regions, First Four)
+python scripts/fetch_bracket.py
 
 # 2. Validate team names resolve correctly
 python scripts/simulate_tournament.py --validate-only
 
-# 3. Run the simulation
+# 3. Print game-by-game picks (for filling in a bracket on a website)
+python scripts/simulate_tournament.py --pick-bracket
+
+# 4. Run Monte Carlo simulation for probability tables
 python scripts/simulate_tournament.py -n 10000
 python scripts/simulate_tournament.py -n 10000 --seed 42    # reproducible
 python scripts/simulate_tournament.py -n 10000 --top 20     # top 20 only
+
+# 5. As the tournament progresses, update with real results and re-run
+python scripts/fetch_bracket.py --update          # fetches completed game results
+python scripts/simulate_tournament.py --pick-bracket   # locked-in games show *
+python scripts/simulate_tournament.py -n 10000         # updated probabilities
 ```
 
-The simulator uses the model's win probabilities (blended with Vegas when available) to play out the bracket thousands of times, then reports each team's probability of reaching each round.
+**`--pick-bracket`** runs through the bracket deterministically (always picking the higher-probability team) and prints every game round by round with win percentages. Use this to fill in a bracket.
+
+**Monte Carlo mode** (`-n`) simulates the full 67-game tournament thousands of times, randomly resolving each game weighted by win probability. The output shows how often each team reached each round across all simulations.
+
+**`--update`** fetches completed tournament games from ESPN and records them as known results. The simulator locks in these results and only simulates remaining games.
+
+Note: Verify `final_four_matchups` in `data/bracket.json` after the initial fetch — ESPN doesn't expose which regions are paired, so the script guesses.
 
 ### 7. Backfill historical Vegas odds
 
@@ -160,7 +173,8 @@ sports_predictions/
 │   ├── predict.py            # CLI for predictions (model + Vegas blending)
 │   ├── predict_slate.py      # Batch predictions for a day's games
 │   ├── backfill_odds.py      # Historical Vegas odds scraper
-│   ├── simulate_tournament.py # Monte Carlo bracket simulator
+│   ├── fetch_bracket.py       # Fetch tournament bracket from ESPN
+│   ├── simulate_tournament.py # Monte Carlo bracket simulator + pick-bracket
 │   ├── migrate_team_aliases.py  # One-time team deduplication
 │   └── migrate_dates.py       # One-time ordinal-to-ISO date conversion
 ├── tests/                    # Unit tests

@@ -2,7 +2,8 @@
 """Monte Carlo NCAA tournament bracket simulator.
 
 Usage:
-    python scripts/simulate_tournament.py --iterations 10000
+    python scripts/simulate_tournament.py --pick-bracket              # print game-by-game picks
+    python scripts/simulate_tournament.py --iterations 10000          # Monte Carlo probabilities
     python scripts/simulate_tournament.py --bracket data/bracket.json -n 50000
     python scripts/simulate_tournament.py -n 10000 --seed 42
     python scripts/simulate_tournament.py -n 10000 --validate-only
@@ -90,7 +91,7 @@ def validate_teams(bracket: dict) -> bool:
     all_teams = []
     for region, seeds in bracket["regions"].items():
         for seed, team in seeds.items():
-            if team:
+            if team and team != "TBD":
                 all_teams.append((f"{region} {seed}-seed", team))
 
     for ff in bracket["first_four"]:
@@ -131,9 +132,41 @@ def get_win_prob(team_a: str, team_b: str, sport: str, season: int) -> float:
     return prob_first if team_a == key[0] else 1 - prob_first
 
 
-def simulate_once(bracket: dict) -> dict:
+def _build_known_results(bracket: dict) -> dict:
+    """Build lookup of known results from bracket.
+
+    Returns dict mapping frozenset({team_a, team_b}) -> winner name.
+    """
+    known = {}
+    for result in bracket.get("known_results", []):
+        key = frozenset({result["winner"], result["loser"]})
+        known[key] = result["winner"]
+    return known
+
+
+def _play_game(t1: str, t2: str, sport: str, season: int,
+               known: dict) -> tuple[str, str]:
+    """Resolve a game between t1 and t2.
+
+    Uses known results if available, otherwise simulates.
+    Returns (winner, loser).
+    """
+    key = frozenset({t1, t2})
+    if key in known:
+        winner = known[key]
+        loser = t2 if winner == t1 else t1
+        return winner, loser
+
+    p = get_win_prob(t1, t2, sport, season)
+    winner = t1 if random.random() < p else t2
+    loser = t2 if winner == t1 else t1
+    return winner, loser
+
+
+def simulate_once(bracket: dict, known: dict) -> dict:
     """Run a single tournament simulation.
 
+    Uses known results for completed games, simulates the rest.
     Returns dict mapping team name -> farthest round reached (2-8).
     Round 1 = First Four, Round 8 = Champion.
     """
@@ -151,9 +184,7 @@ def simulate_once(bracket: dict) -> dict:
         t1, t2 = ff["teams"]
         if not t1 or not t2:
             continue
-        p = get_win_prob(t1, t2, sport, season)
-        winner = t1 if random.random() < p else t2
-        loser = t2 if winner == t1 else t1
+        winner, loser = _play_game(t1, t2, sport, season, known)
         results[loser] = 1  # eliminated in First Four
         r64_teams[ff["region"]][ff["seed"]] = winner
 
@@ -165,9 +196,7 @@ def simulate_once(bracket: dict) -> dict:
         for s1, s2 in MATCHUP_ORDER:
             t1 = seeds[str(s1)]
             t2 = seeds[str(s2)]
-            p = get_win_prob(t1, t2, sport, season)
-            winner = t1 if random.random() < p else t2
-            loser = t2 if winner == t1 else t1
+            winner, loser = _play_game(t1, t2, sport, season, known)
             results[loser] = 2  # eliminated in R64
             round_winners.append(winner)
 
@@ -177,9 +206,7 @@ def simulate_once(bracket: dict) -> dict:
             next_round = []
             for i in range(0, len(round_winners), 2):
                 t1, t2 = round_winners[i], round_winners[i + 1]
-                p = get_win_prob(t1, t2, sport, season)
-                winner = t1 if random.random() < p else t2
-                loser = t2 if winner == t1 else t1
+                winner, loser = _play_game(t1, t2, sport, season, known)
                 results[loser] = round_num
                 next_round.append(winner)
             round_winners = next_round
@@ -192,17 +219,13 @@ def simulate_once(bracket: dict) -> dict:
     for r1, r2 in bracket["final_four_matchups"]:
         t1 = region_winners[r1]
         t2 = region_winners[r2]
-        p = get_win_prob(t1, t2, sport, season)
-        winner = t1 if random.random() < p else t2
-        loser = t2 if winner == t1 else t1
+        winner, loser = _play_game(t1, t2, sport, season, known)
         results[loser] = 6  # eliminated in Final Four
         ff_winners.append(winner)
 
     # Championship game (round 7)
     t1, t2 = ff_winners
-    p = get_win_prob(t1, t2, sport, season)
-    winner = t1 if random.random() < p else t2
-    loser = t2 if winner == t1 else t1
+    winner, loser = _play_game(t1, t2, sport, season, known)
     results[loser] = 7  # lost championship
     results[winner] = 8  # champion
 
@@ -214,6 +237,10 @@ def run_simulations(bracket: dict, n: int) -> dict:
 
     Returns dict mapping team -> {round_num: count_reached_at_least}.
     """
+    known = _build_known_results(bracket)
+    if known:
+        print(f"  {len(known)} known game results locked in")
+
     # Collect all team names
     all_teams = set()
     for seeds in bracket["regions"].values():
@@ -221,13 +248,14 @@ def run_simulations(bracket: dict, n: int) -> dict:
     for ff in bracket["first_four"]:
         all_teams.update(ff["teams"])
     all_teams.discard("")
+    all_teams.discard("TBD")
 
     # counts[team][round] = number of times team reached at least that round
     counts = {team: defaultdict(int) for team in all_teams}
 
     t0 = time.time()
     for i in range(n):
-        sim = simulate_once(bracket)
+        sim = simulate_once(bracket, known)
         for team, farthest_round in sim.items():
             # Team reached all rounds up to and including farthest_round
             for r in range(1, farthest_round + 1):
@@ -305,6 +333,153 @@ def print_results(counts: dict, n: int, bracket: dict, top: int = 0):
             print(f"  {team} ({seed}): {100*pct:.1f}%")
 
 
+def _pick_game(t1: str, t2: str, sport: str, season: int,
+               known: dict, seed_info: dict) -> tuple[str, str, float, bool]:
+    """Pick a game winner deterministically (higher probability wins).
+
+    Returns (winner, loser, winner_prob, was_known).
+    """
+    key = frozenset({t1, t2})
+    if key in known:
+        winner = known[key]
+        loser = t2 if winner == t1 else t1
+        return winner, loser, 1.0, True
+
+    p = get_win_prob(t1, t2, sport, season)
+    if p >= 0.5:
+        return t1, t2, p, False
+    else:
+        return t2, t1, 1 - p, False
+
+
+def _fmt_team(name: str, seed_info: dict) -> str:
+    """Format team name with seed for display."""
+    seed = seed_info.get(name, "")
+    if seed:
+        return f"({seed}) {name}"
+    return name
+
+
+def print_bracket(bracket: dict):
+    """Print the model's bracket picks for every game, round by round."""
+    sport = bracket["sport"]
+    season = bracket["season"]
+    known = _build_known_results(bracket)
+
+    # Build seed lookup
+    seed_info = {}
+    for region, seeds in bracket["regions"].items():
+        for seed, team in seeds.items():
+            if team and team != "TBD":
+                seed_info[team] = seed
+    for ff in bracket["first_four"]:
+        for team in ff["teams"]:
+            if team:
+                seed_info.setdefault(team, ff["seed"])
+
+    if known:
+        print(f"  {len(known)} known results locked in (marked with *)\n")
+
+    # === First Four ===
+    r64_teams = {}
+    for region, seeds in bracket["regions"].items():
+        r64_teams[region] = dict(seeds)
+
+    has_first_four = any(ff["teams"][0] and ff["teams"][1]
+                         for ff in bracket["first_four"])
+    if has_first_four:
+        print("=== First Four ===")
+        for ff in bracket["first_four"]:
+            t1, t2 = ff["teams"]
+            if not t1 or not t2:
+                continue
+            winner, loser, prob, was_known = _pick_game(
+                t1, t2, sport, season, known, seed_info)
+            lock = " *" if was_known else ""
+            print(f"  {ff['region']} {ff['seed']}-seed: "
+                  f"{_fmt_team(t1, seed_info)} vs {_fmt_team(t2, seed_info)}"
+                  f"  -->  {winner} ({100*prob:.0f}%){lock}")
+            r64_teams[ff["region"]][ff["seed"]] = winner
+        print()
+
+    # === Round of 64 ===
+    print("=== Round of 64 ===")
+    r32_teams = {}
+    for region in sorted(r64_teams.keys()):
+        seeds = r64_teams[region]
+        print(f"  --- {region} ---")
+        round_winners = []
+        for s1, s2 in MATCHUP_ORDER:
+            t1 = seeds[str(s1)]
+            t2 = seeds[str(s2)]
+            winner, loser, prob, was_known = _pick_game(
+                t1, t2, sport, season, known, seed_info)
+            lock = " *" if was_known else ""
+            print(f"  {_fmt_team(t1, seed_info):>30s}  vs  "
+                  f"{_fmt_team(t2, seed_info):<30s}"
+                  f"  -->  {winner} ({100*prob:.0f}%){lock}")
+            round_winners.append(winner)
+        r32_teams[region] = round_winners
+        print()
+
+    # === R32 through Elite 8 ===
+    round_num = 3
+    current_teams = r32_teams
+    while any(len(v) > 1 for v in current_teams.values()):
+        round_name = ROUND_NAMES.get(round_num, f"Round {round_num}")
+        print(f"=== {round_name} ===")
+        next_teams = {}
+        for region in sorted(current_teams.keys()):
+            teams = current_teams[region]
+            if len(teams) <= 1:
+                next_teams[region] = teams
+                continue
+            print(f"  --- {region} ---")
+            round_winners = []
+            for i in range(0, len(teams), 2):
+                t1, t2 = teams[i], teams[i + 1]
+                winner, loser, prob, was_known = _pick_game(
+                    t1, t2, sport, season, known, seed_info)
+                lock = " *" if was_known else ""
+                print(f"  {_fmt_team(t1, seed_info):>30s}  vs  "
+                      f"{_fmt_team(t2, seed_info):<30s}"
+                      f"  -->  {winner} ({100*prob:.0f}%){lock}")
+                round_winners.append(winner)
+            next_teams[region] = round_winners
+            print()
+        current_teams = next_teams
+        round_num += 1
+
+    # Region winners
+    region_winners = {r: ts[0] for r, ts in current_teams.items()}
+
+    # === Final Four ===
+    print("=== Final Four ===")
+    ff_winners = []
+    for r1, r2 in bracket["final_four_matchups"]:
+        t1 = region_winners[r1]
+        t2 = region_winners[r2]
+        winner, loser, prob, was_known = _pick_game(
+            t1, t2, sport, season, known, seed_info)
+        lock = " *" if was_known else ""
+        print(f"  {_fmt_team(t1, seed_info):>30s}  vs  "
+              f"{_fmt_team(t2, seed_info):<30s}"
+              f"  -->  {winner} ({100*prob:.0f}%){lock}")
+        ff_winners.append(winner)
+    print()
+
+    # === Championship ===
+    print("=== Championship ===")
+    t1, t2 = ff_winners
+    winner, loser, prob, was_known = _pick_game(
+        t1, t2, sport, season, known, seed_info)
+    lock = " *" if was_known else ""
+    print(f"  {_fmt_team(t1, seed_info):>30s}  vs  "
+          f"{_fmt_team(t2, seed_info):<30s}"
+          f"  -->  {winner} ({100*prob:.0f}%){lock}")
+    print(f"\n  Champion: {_fmt_team(winner, seed_info)}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Monte Carlo NCAA tournament bracket simulator"
@@ -329,6 +504,10 @@ def main():
         "--validate-only", action="store_true",
         help="Just validate team names, don't simulate"
     )
+    parser.add_argument(
+        "--pick-bracket", action="store_true",
+        help="Print the model's bracket picks for every game, round by round"
+    )
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -341,6 +520,10 @@ def main():
 
     if args.validate_only:
         print("Bracket is valid.")
+        return
+
+    if args.pick_bracket:
+        print_bracket(bracket)
         return
 
     print(f"Running {args.iterations:,} simulations...")

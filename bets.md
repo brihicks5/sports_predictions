@@ -36,12 +36,12 @@
 
 | Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
 |------|-------------|-------------|-----|------|--------|--------|-----|
-| Vanderbilt vs Arkansas (N) | Vanderbilt -2.0 | Vanderbilt -2.5 | Vanderbilt -2.5 | +100 | $5 | | |
-| Wichita St vs South Florida (N) | South Florida -1.2 | South Florida -6.5 | Wichita St +6.5 | -115 | $5 | | |
-| Purdue vs Michigan (N) | Michigan -1.6 | Michigan -5.5 | Michigan -3.5 | -149 | $5 | | |
+| Vanderbilt vs Arkansas (N) | Vanderbilt -2.0 | Vanderbilt -2.5 | Vanderbilt -2.5 | +100 | $5 | LOSS (75-86 Arkansas) | -$5.00 |
+| Wichita St vs South Florida (N) | South Florida -1.2 | South Florida -6.5 | Wichita St +6.5 | -115 | $5 | LOSS (55-70 USF) | -$5.00 |
+| Purdue vs Michigan (N) | Michigan -1.6 | Michigan -5.5 | Michigan -3.5 | -149 | $5 | LOSS (80-72 Purdue) | -$5.00 |
 
-**Daily: 0-0 (3 pending), $0.00**
+**Daily: 0-3, -$15.00**
 
 ---
 
-**Running Total: 6-4 (3 pending), +$3.10**
+**Running Total: 6-7, -$11.90**

@@ -47,46 +47,35 @@ def main():
     print(f"=== Updating NCAA Basketball data for {args.season} ===")
     print(f"Timestamp: {datetime.now().isoformat()}")
 
-    data_changed = False
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # Step 1: Fetch recent game results from ESPN
     if not args.skip_espn:
         print("\n--- Fetching ESPN games ---")
-        today = datetime.now().strftime("%Y-%m-%d")
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        espn_games = fetch_espn_games(yesterday) + fetch_espn_games(today)
-        if espn_games > 0:
-            data_changed = True
+        fetch_espn_games(yesterday)
+        fetch_espn_games(today)
 
     # Step 2: Compute basic stats from game results already in the DB
-    if data_changed or args.skip_espn:
-        print("\n--- Computing season stats ---")
-        compute_season_stats(args.season)
+    print("\n--- Computing season stats ---")
+    compute_season_stats(args.season)
 
     # Step 3: Fetch KenPom ratings via API
     if not args.skip_kenpom:
         print("\n--- Fetching KenPom ratings ---")
-        kenpom_changed = fetch_kenpom_ratings(args.season)
+        fetch_kenpom_ratings(args.season)
 
         print("\n--- Fetching KenPom four-factors ---")
-        kenpom_changed += fetch_kenpom_four_factors(args.season)
+        fetch_kenpom_four_factors(args.season)
 
         print("\n--- Fetching KenPom archive (PIT ratings) ---")
         for d in [yesterday, today]:
-            archive_changed = fetch_kenpom_archive_date(d)
-            if archive_changed > 0:
-                kenpom_changed += archive_changed
-
-        if kenpom_changed > 0:
-            data_changed = True
+            fetch_kenpom_archive_date(d)
 
     # Step 4: Retrain model
     if not args.skip_train:
-        if data_changed:
-            print("\n--- Training model ---")
-            train_model("ncaa_basketball")
-        else:
-            print("\n--- Skipping training (no data changed) ---")
+        print("\n--- Training model ---")
+        train_model("ncaa_basketball")
 
     print("\n=== Update complete ===")
 

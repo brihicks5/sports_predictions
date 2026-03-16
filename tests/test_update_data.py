@@ -1,4 +1,4 @@
-"""Tests for the update_data script's skip-training-when-no-changes logic."""
+"""Tests for the update_data script's training and skip-flag behavior."""
 
 import sys
 from pathlib import Path
@@ -29,11 +29,11 @@ class TestSkipTraining:
     @patch("scripts.update_data.fetch_kenpom_four_factors", return_value=0)
     @patch("scripts.update_data.fetch_kenpom_ratings", return_value=0)
     @patch("scripts.update_data.fetch_espn_games", return_value=0)
-    def test_no_changes_skips_training(self, mock_espn, mock_ratings,
-                                       mock_ff, mock_stats, mock_train):
-        """When ESPN returns 0 games and KenPom returns 0 changes, skip training."""
+    def test_no_changes_still_trains(self, mock_espn, mock_ratings,
+                                      mock_ff, mock_stats, mock_train):
+        """Training always runs even when no data changed."""
         run_main("--season", "2026")
-        mock_train.assert_not_called()
+        mock_train.assert_called_once_with("ncaa_basketball")
 
     @patch("scripts.update_data.train_model")
     @patch("scripts.update_data.compute_season_stats")
@@ -147,11 +147,11 @@ class TestSkipSourceFlags:
     @patch("scripts.update_data.fetch_kenpom_four_factors", return_value=0)
     @patch("scripts.update_data.fetch_kenpom_ratings", return_value=0)
     @patch("scripts.update_data.fetch_espn_games", return_value=0)
-    def test_no_espn_changes_skips_stats(self, mock_espn, mock_ratings,
-                                          mock_ff, mock_stats, mock_train):
-        """When ESPN returns 0 games (not skipped), stats should not recompute."""
+    def test_no_espn_changes_still_computes_stats(self, mock_espn, mock_ratings,
+                                                     mock_ff, mock_stats, mock_train):
+        """Stats always recompute even when ESPN returns 0 changes."""
         run_main("--season", "2026")
-        mock_stats.assert_not_called()
+        mock_stats.assert_called_once_with(2026)
 
     @patch("scripts.update_data.train_model")
     @patch("scripts.update_data.compute_season_stats")
@@ -169,8 +169,8 @@ class TestSkipSourceFlags:
     @patch("scripts.update_data.fetch_kenpom_four_factors", return_value=0)
     @patch("scripts.update_data.fetch_kenpom_ratings", return_value=0)
     @patch("scripts.update_data.fetch_espn_games", return_value=0)
-    def test_both_skipped_no_training(self, mock_espn, mock_ratings,
-                                       mock_ff, mock_stats, mock_train):
-        """--skip-espn + --skip-kenpom with no changes should skip training."""
+    def test_both_skipped_still_trains(self, mock_espn, mock_ratings,
+                                        mock_ff, mock_stats, mock_train):
+        """--skip-espn + --skip-kenpom still trains (use --skip-train to prevent)."""
         run_main("--season", "2026", "--skip-espn", "--skip-kenpom")
-        mock_train.assert_not_called()
+        mock_train.assert_called_once_with("ncaa_basketball")

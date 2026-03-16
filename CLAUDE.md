@@ -15,6 +15,10 @@ NCAA basketball (and eventually other sports) game outcome prediction using hist
 - `python scripts/predict_slate.py --date 2026-03-14 --results-only` — fill in scores without re-predicting
 - `python scripts/update_data.py --season 2026` — refresh ESPN games, KenPom, and retrain
 - `python scripts/import_kaggle.py` — one-time bulk import from Kaggle
+- `python scripts/fetch_bracket.py` — fetch tournament bracket from ESPN
+- `python scripts/fetch_bracket.py --update` — update bracket with completed game results
+- `python scripts/simulate_tournament.py --pick-bracket` — print game-by-game picks for filling in a bracket
+- `python scripts/simulate_tournament.py -n 10000` — Monte Carlo tournament simulation
 
 ## Code Conventions
 - Use `python -u` for scripts that print progress (avoids output buffering)

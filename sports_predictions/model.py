@@ -302,59 +302,29 @@ def train_model(sport: str, seasons: list = None):
         model.fit(X, y)
         return model, scores
 
-    # Train margin and total regressors in parallel
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        margin_future = executor.submit(_train_regressor, y_margin, "Margin")
-        total_future = executor.submit(_train_regressor, y_total, "Total")
-        margin_model, margin_scores = margin_future.result()
-        total_model, total_scores = total_future.result()
+    def _train_ats_pipeline(sport):
+        """Build ATS data from DB and train ATS model.
 
-    # Calibration: compute scale factor to match actual margin spread.
-    # Model margins are compressed (std ~10 vs actual ~14). For ATS picks,
-    # we scale predictions to match the actual distribution width.
-    print("Computing margin calibration...")
-    margin_cv_preds = cross_val_predict(margin_model, X, y_margin, cv=5)
-    pred_std = np.std(margin_cv_preds)
-    actual_std = np.std(y_margin)
-    margin_calibration_scale = actual_std / pred_std
-    print(f"Margin calibration: pred std={pred_std:.1f}, actual std={actual_std:.1f}, "
-          f"scale={margin_calibration_scale:.3f}")
+        Returns (ats_model, feature_columns) or (None, None).
+        """
+        conn = get_db(sport)
+        ats_pit_stats = ARCHIVE_STATS + ["consensus_rank"]
 
-    # Train variance model: predicts expected absolute error of margin model.
-    # Uses CV predictions to avoid overfitting (model can't see its own answers).
-    print("Training variance model...")
-    margin_residuals = np.abs(y_margin - margin_cv_preds)
-    variance_model = Pipeline([
-        ("scaler", StandardScaler()),
-        ("mlp", MLPRegressor(
-            hidden_layer_sizes=(128, 64), max_iter=500,
-            random_state=42, early_stopping=True, alpha=0.001,
-        )),
-    ])
-    variance_model.fit(X, margin_residuals)
-    var_preds = variance_model.predict(X)
-    print(f"Variance model range: {var_preds.min():.1f} to {var_preds.max():.1f} "
-          f"(mean {var_preds.mean():.1f})")
+        games_with_odds = conn.execute("""
+            SELECT home_team_id, away_team_id, home_score, away_score,
+                   neutral_site, date, vegas_spread
+            FROM games
+            WHERE vegas_spread IS NOT NULL AND home_score IS NOT NULL
+                  AND season >= 2010
+            ORDER BY date
+        """).fetchall()
 
-    # ATS model: predict cover margin using point-in-time features.
-    # Uses PIT stats (what was known at game time) rather than end-of-season
-    # stats, so the model learns real edges over Vegas rather than hindsight.
-    ats_model = None
-    ats_feature_columns = None
-    conn = get_db(sport)
-    ats_pit_stats = ARCHIVE_STATS + ["consensus_rank"]
+        if len(games_with_odds) <= 1000:
+            conn.close()
+            print(f"\nSkipping ATS model: only {len(games_with_odds)} games "
+                  f"with odds (need 1000+)")
+            return None, None
 
-    games_with_odds = conn.execute("""
-        SELECT home_team_id, away_team_id, home_score, away_score,
-               neutral_site, date, vegas_spread
-        FROM games
-        WHERE vegas_spread IS NOT NULL AND home_score IS NOT NULL
-              AND season >= 2010
-        ORDER BY date
-    """).fetchall()
-
-    if len(games_with_odds) > 1000:
-        print(f"\nTraining ATS model on PIT features...")
         ats_rows = []
         y_cover_list = []
 
@@ -389,13 +359,15 @@ def train_model(sport: str, seasons: list = None):
             row["vegas_spread"] = spread
 
             ats_rows.append(row)
-            # Cover margin: positive = home covered
             y_cover_list.append(margin + spread)
+
+        conn.close()
 
         X_ats = pd.DataFrame(ats_rows)
         y_cover = np.array(y_cover_list)
         ats_feature_columns = list(X_ats.columns)
 
+        print(f"\nTraining ATS model on PIT features...")
         print(f"  {len(X_ats)} games with PIT features + odds")
 
         ats_model = Pipeline([
@@ -421,7 +393,6 @@ def train_model(sport: str, seasons: list = None):
                        == (y_cover[non_push] > 0)).mean()
         print(f"  ATS accuracy (CV): {ats_correct:.1%}")
 
-        # Accuracy at higher confidence
         for thresh in [2, 3, 5]:
             mask = non_push & (np.abs(ats_cv_preds) > thresh)
             if mask.sum() > 0:
@@ -431,11 +402,52 @@ def train_model(sport: str, seasons: list = None):
                       f"{acc:.1%} ({mask.sum()} games)")
 
         ats_model.fit(X_ats, y_cover)
-    else:
-        print(f"\nSkipping ATS model: only {len(games_with_odds)} games "
-              f"with odds (need 1000+)")
+        return ats_model, ats_feature_columns
 
-    conn.close()
+    def _train_margin_pipeline(X, y_margin, y_total):
+        """Train margin/total regressors, calibration, and variance model."""
+        # Train margin and total regressors in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            margin_future = executor.submit(_train_regressor, y_margin, "Margin")
+            total_future = executor.submit(_train_regressor, y_total, "Total")
+            margin_model, margin_scores = margin_future.result()
+            total_model, total_scores = total_future.result()
+
+        # Calibration: compute scale factor to match actual margin spread.
+        print("Computing margin calibration...")
+        margin_cv_preds = cross_val_predict(margin_model, X, y_margin, cv=5)
+        pred_std = np.std(margin_cv_preds)
+        actual_std = np.std(y_margin)
+        margin_calibration_scale = actual_std / pred_std
+        print(f"Margin calibration: pred std={pred_std:.1f}, actual std={actual_std:.1f}, "
+              f"scale={margin_calibration_scale:.3f}")
+
+        # Train variance model
+        print("Training variance model...")
+        margin_residuals = np.abs(y_margin - margin_cv_preds)
+        variance_model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("mlp", MLPRegressor(
+                hidden_layer_sizes=(128, 64), max_iter=500,
+                random_state=42, early_stopping=True, alpha=0.001,
+            )),
+        ])
+        variance_model.fit(X, margin_residuals)
+        var_preds = variance_model.predict(X)
+        print(f"Variance model range: {var_preds.min():.1f} to {var_preds.max():.1f} "
+              f"(mean {var_preds.mean():.1f})")
+
+        return margin_model, total_model, variance_model, margin_calibration_scale
+
+    # Train margin pipeline and ATS pipeline in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        margin_future = executor.submit(_train_margin_pipeline,
+                                        X, y_margin, y_total)
+        ats_future = executor.submit(_train_ats_pipeline, sport)
+
+        margin_model, total_model, variance_model, margin_calibration_scale = \
+            margin_future.result()
+        ats_model, ats_feature_columns = ats_future.result()
 
     # Derive logistic k from margin standard deviation
     # P(home_win | margin) = 1 / (1 + exp(-k * margin))
@@ -478,7 +490,7 @@ def train_model(sport: str, seasons: list = None):
                             key=lambda x: -x[1]):
         print(f"  {name}: {imp / total_imp:.4f}")
 
-    return margin_model, -margin_scores.mean()
+    return margin_model
 
 
 def predict_game(sport: str, home_team: str, away_team: str,
