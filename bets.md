@@ -45,3 +45,22 @@
 ---
 
 **Running Total: 6-7, -$11.90**
+
+## 2026-03-19
+
+| Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
+|------|-------------|-------------|-----|------|--------|--------|-----|
+| South Florida vs Louisville (N) | Louisville -2.2 | Louisville -4.5 | South Florida +4.5 | -112 | $2.50 | | |
+| VCU vs North Carolina (N) | VCU -0.4 | North Carolina -2.5 | VCU +2.5 | -108 | $2.50 | | |
+| Texas vs BYU (N) | BYU -0.6 | BYU -2.5 | Texas +2.5 | -110 | $2.50 | | |
+| Howard vs Michigan (N) | Michigan -20.0 | Michigan -31.5 | Howard +31.5 | -118 | $2.50 | | |
+| N Dakota St vs Michigan St (N) | Michigan St -7.3 | Michigan St -16.5 | N Dakota St +16.5 | -118 | $2.50 | | |
+| Penn vs Illinois (N) | Illinois -14.5 | Illinois -25.5 | Penn +25.5 | -112 | $2.50 | | |
+| McNeese vs Vanderbilt (N) | Vanderbilt -5.6 | Vanderbilt -11.5 | McNeese +11.5 | -112 | $2.50 | | |
+| High Point vs Wisconsin (N) | Wisconsin -3.2 | Wisconsin -10.5 | High Point +10.5 | -118 | $2.50 | | |
+
+**Daily: 0-0, $0.00**
+
+---
+
+**Running Total: 6-7, -$11.90**

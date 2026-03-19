@@ -92,11 +92,15 @@ def build_training_data(sport: str, seasons: list = None):
 
     feature_stats = FEATURE_STATS
 
+    from collections import defaultdict
+
     X_rows = []
     y_win_rows = []
     y_margin_rows = []
     y_total_rows = []
     vegas_spreads = []  # For ATS model (None if no odds)
+    season_counts = {}  # season -> {"total": N, "used": N, "skipped_no_stats": N}
+    date_counts = defaultdict(int)  # date -> number of games used
 
     for season in seasons:
         games = conn.execute("""
@@ -106,6 +110,8 @@ def build_training_data(sport: str, seasons: list = None):
             WHERE season = ? AND home_score IS NOT NULL
             ORDER BY date
         """, (season,)).fetchall()
+
+        counts = {"total": len(games), "used": 0, "skipped_no_stats": 0}
 
         for game in games:
             home_feats = _get_team_features(
@@ -117,6 +123,7 @@ def build_training_data(sport: str, seasons: list = None):
 
             # Skip if either team has no stats
             if not home_feats or not away_feats:
+                counts["skipped_no_stats"] += 1
                 continue
 
             hid = game["home_team_id"]
@@ -157,6 +164,8 @@ def build_training_data(sport: str, seasons: list = None):
             else:
                 row["avg_tempo"] = 0.0
 
+            counts["used"] += 1
+            date_counts[game["date"]] += 1
             X_rows.append(row)
             y_win_rows.append(
                 1 if game["home_score"] > game["away_score"] else 0
@@ -165,13 +174,16 @@ def build_training_data(sport: str, seasons: list = None):
             y_total_rows.append(game["home_score"] + game["away_score"])
             vegas_spreads.append(game["vegas_spread"])
 
+        season_counts[season] = counts
+
     conn.close()
 
     X = pd.DataFrame(X_rows)
     y_win = np.array(y_win_rows)
     y_margin = np.array(y_margin_rows)
     y_total = np.array(y_total_rows)
-    return X, y_win, y_margin, y_total, feature_stats, vegas_spreads
+    return (X, y_win, y_margin, y_total, feature_stats, vegas_spreads,
+            season_counts, dict(date_counts))
 
 
 # Stats available from the KenPom archive endpoint (point-in-time)
@@ -280,10 +292,55 @@ def train_model(sport: str, seasons: list = None):
 
     Returns the margin model and cross-validation margin MAE.
     """
-    X, y_win, y_margin, y_total, feature_stats, vegas_spreads = \
-        build_training_data(sport, seasons)
+    # Load previous training counts for comparison
+    model_path = DATA_DIR / f"{sport}_model.pkl"
+    prev_counts = {}
+    prev_date_counts = {}
+    prev_ats_counts = {}
+    prev_ats_date_counts = {}
+    if model_path.exists():
+        with open(model_path, "rb") as f:
+            prev_data = pickle.load(f)
+            prev_counts = prev_data.get("margin_season_counts", {})
+            prev_date_counts = prev_data.get("margin_date_counts", {})
+            prev_ats_counts = prev_data.get("ats_season_counts", {})
+            prev_ats_date_counts = prev_data.get("ats_date_counts", {})
+
+    X, y_win, y_margin, y_total, feature_stats, vegas_spreads, \
+        season_counts, date_counts = build_training_data(sport, seasons)
     print(f"Training on {len(X)} games with features: {feature_stats}"
           f" + PIT: {PIT_FEATURES}")
+
+    # Show per-season and per-date breakdown if counts changed
+    if prev_counts:
+        changed_seasons = []
+        for season, counts in sorted(season_counts.items()):
+            prev = prev_counts.get(season, {})
+            prev_used = prev.get("used", 0)
+            delta = counts["used"] - prev_used
+            if delta != 0:
+                changed_seasons.append((season, prev_used, counts["used"],
+                                        delta, counts["skipped_no_stats"]))
+        if changed_seasons:
+            print("  Margin data changes by season:")
+            for season, prev_used, now_used, delta, skipped in changed_seasons:
+                sign = "+" if delta > 0 else ""
+                skip_note = (f" ({skipped} skipped, no stats)"
+                             if skipped else "")
+                print(f"    {season}: {prev_used} -> {now_used} ({sign}{delta})"
+                      f"{skip_note}")
+    if prev_date_counts:
+        changed_dates = []
+        for date, count in sorted(date_counts.items()):
+            prev_count = prev_date_counts.get(date, 0)
+            delta = count - prev_count
+            if delta != 0:
+                changed_dates.append((date, prev_count, count, delta))
+        if changed_dates:
+            print("  Margin data changes by date:")
+            for date, prev_count, now_count, delta in changed_dates:
+                sign = "+" if delta > 0 else ""
+                print(f"    {date}: {prev_count} -> {now_count} ({sign}{delta})")
 
     def _train_regressor(y, label):
         """Train a regressor with CV and return (model, scores)."""
@@ -312,7 +369,7 @@ def train_model(sport: str, seasons: list = None):
 
         games_with_odds = conn.execute("""
             SELECT home_team_id, away_team_id, home_score, away_score,
-                   neutral_site, date, vegas_spread
+                   neutral_site, date, vegas_spread, season
             FROM games
             WHERE vegas_spread IS NOT NULL AND home_score IS NOT NULL
                   AND season >= 2010
@@ -323,10 +380,14 @@ def train_model(sport: str, seasons: list = None):
             conn.close()
             print(f"\nSkipping ATS model: only {len(games_with_odds)} games "
                   f"with odds (need 1000+)")
-            return None, None
+            return None, None, {}
+
+        from collections import defaultdict
 
         ats_rows = []
         y_cover_list = []
+        ats_season_counts = {}  # season -> {"total": N, "used": N, "skipped_no_pit": N}
+        ats_date_counts = defaultdict(int)  # date -> number of games used
 
         for game in games_with_odds:
             hid = game["home_team_id"]
@@ -334,6 +395,12 @@ def train_model(sport: str, seasons: list = None):
             date_str = game["date"]
             spread = float(game["vegas_spread"])
             margin = game["home_score"] - game["away_score"]
+            season = game["season"]
+
+            if season not in ats_season_counts:
+                ats_season_counts[season] = {"total": 0, "used": 0,
+                                             "skipped_no_pit": 0}
+            ats_season_counts[season]["total"] += 1
 
             row = {}
             skip = False
@@ -347,6 +414,7 @@ def train_model(sport: str, seasons: list = None):
                     break
 
             if skip:
+                ats_season_counts[season]["skipped_no_pit"] += 1
                 continue
 
             # Average tempo (PIT)
@@ -358,6 +426,8 @@ def train_model(sport: str, seasons: list = None):
             row["neutral_site"] = game["neutral_site"]
             row["vegas_spread"] = spread
 
+            ats_season_counts[season]["used"] += 1
+            ats_date_counts[date_str] += 1
             ats_rows.append(row)
             y_cover_list.append(margin + spread)
 
@@ -402,7 +472,7 @@ def train_model(sport: str, seasons: list = None):
                       f"{acc:.1%} ({mask.sum()} games)")
 
         ats_model.fit(X_ats, y_cover)
-        return ats_model, ats_feature_columns
+        return ats_model, ats_feature_columns, ats_season_counts, dict(ats_date_counts)
 
     def _train_margin_pipeline(X, y_margin, y_total):
         """Train margin/total regressors, calibration, and variance model."""
@@ -447,7 +517,39 @@ def train_model(sport: str, seasons: list = None):
 
         margin_model, total_model, variance_model, margin_calibration_scale = \
             margin_future.result()
-        ats_model, ats_feature_columns = ats_future.result()
+        ats_model, ats_feature_columns, ats_season_counts, ats_date_counts = \
+            ats_future.result()
+
+    # Show ATS per-season breakdown if counts changed
+    if prev_ats_counts and ats_season_counts:
+        changed = []
+        for season, counts in sorted(ats_season_counts.items()):
+            prev = prev_ats_counts.get(season, {})
+            prev_used = prev.get("used", 0)
+            delta = counts["used"] - prev_used
+            if delta != 0:
+                changed.append((season, prev_used, counts["used"], delta,
+                                counts["skipped_no_pit"]))
+        if changed:
+            print("  ATS data changes by season:")
+            for season, prev_used, now_used, delta, skipped in changed:
+                sign = "+" if delta > 0 else ""
+                skip_note = (f" ({skipped} skipped, no PIT data)"
+                             if skipped else "")
+                print(f"    {season}: {prev_used} -> {now_used} ({sign}{delta})"
+                      f"{skip_note}")
+    if prev_ats_date_counts and ats_date_counts:
+        changed_dates = []
+        for date, count in sorted(ats_date_counts.items()):
+            prev_count = prev_ats_date_counts.get(date, 0)
+            delta = count - prev_count
+            if delta != 0:
+                changed_dates.append((date, prev_count, count, delta))
+        if changed_dates:
+            print("  ATS data changes by date:")
+            for date, prev_count, now_count, delta in changed_dates:
+                sign = "+" if delta > 0 else ""
+                print(f"    {date}: {prev_count} -> {now_count} ({sign}{delta})")
 
     # Derive logistic k from margin standard deviation
     # P(home_win | margin) = 1 / (1 + exp(-k * margin))
@@ -475,6 +577,10 @@ def train_model(sport: str, seasons: list = None):
             "margin_calibration_scale": margin_calibration_scale,
             "feature_stats": feature_stats,
             "feature_columns": list(X.columns),
+            "margin_season_counts": season_counts,
+            "margin_date_counts": date_counts,
+            "ats_season_counts": ats_season_counts,
+            "ats_date_counts": ats_date_counts,
         }, f)
     print(f"Models saved to {model_path}")
 
