@@ -469,8 +469,8 @@ def _extract_espn_odds(pick: dict) -> dict:
     """Extract odds from ESPN pickcenter data for storage.
 
     Returns kwargs suitable for upsert_game(). Spread is from the home team
-    perspective (positive = home favored), matching our model convention.
-    ESPN's spread is negative when home is favored, so we negate it.
+    perspective: negative = home favored, positive = home underdog.
+    ESPN's home line uses the same convention, so we store it directly.
     """
     result = {}
 
@@ -479,9 +479,9 @@ def _extract_espn_odds(pick: dict) -> dict:
     if spread_data:
         home_line = spread_data.get("home", {}).get("close", {}).get("line")
         if home_line is not None:
-            result["vegas_spread"] = -float(home_line)
+            result["vegas_spread"] = float(home_line)
     if "vegas_spread" not in result and "spread" in pick:
-        result["vegas_spread"] = -float(pick["spread"])
+        result["vegas_spread"] = float(pick["spread"])
 
     # Total
     total_data = pick.get("total", {})
