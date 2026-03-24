@@ -256,6 +256,10 @@ def main():
         "--results-only", action="store_true",
         help="Update an existing slate file with results only (no re-prediction)"
     )
+    parser.add_argument(
+        "--postseason", action="store_true",
+        help="Mark games as postseason (tournament) for model adjustments"
+    )
     args = parser.parse_args()
 
     target_date = date.fromisoformat(args.date) if args.date else date.today()
@@ -289,7 +293,7 @@ def main():
         try:
             result = predict_game(
                 args.sport, home, away, args.season, neutral_site=neutral,
-                vegas_spread=vegas_spread
+                vegas_spread=vegas_spread, postseason=args.postseason
             )
         except (ValueError, FileNotFoundError):
             # Team not in our database (non-D1, etc.)

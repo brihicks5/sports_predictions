@@ -34,6 +34,10 @@ def main():
         "--neutral", action="store_true",
         help="Game is at a neutral site"
     )
+    parser.add_argument(
+        "--postseason", action="store_true",
+        help="Game is a postseason/tournament game"
+    )
     args = parser.parse_args()
 
     # Fetch Vegas odds first so we can pass spread to predict_game
@@ -43,7 +47,7 @@ def main():
     result = predict_game(
         args.sport, args.home_team, args.away_team,
         args.season, neutral_site=args.neutral,
-        vegas_spread=vegas_spread_val
+        vegas_spread=vegas_spread_val, postseason=args.postseason
     )
 
     home = result['home_team']

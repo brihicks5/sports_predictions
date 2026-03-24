@@ -126,7 +126,8 @@ def get_win_prob(team_a: str, team_b: str, sport: str, season: int) -> float:
     """Get win probability for team_a vs team_b (neutral site), with caching."""
     key = tuple(sorted([team_a, team_b]))
     if key not in _prob_cache:
-        result = predict_game(sport, key[0], key[1], season, neutral_site=True)
+        result = predict_game(sport, key[0], key[1], season, neutral_site=True,
+                              postseason=True)
         _prob_cache[key] = result["home_win_prob"]
     prob_first = _prob_cache[key]
     return prob_first if team_a == key[0] else 1 - prob_first

@@ -105,7 +105,7 @@ def build_training_data(sport: str, seasons: list = None):
     for season in seasons:
         games = conn.execute("""
             SELECT home_team_id, away_team_id, home_score, away_score,
-                   neutral_site, date, vegas_spread
+                   neutral_site, date, vegas_spread, postseason
             FROM games
             WHERE season = ? AND home_score IS NOT NULL
             ORDER BY date
@@ -147,6 +147,15 @@ def build_training_data(sport: str, seasons: list = None):
                 else:
                     row[f"diff_{col_name}"] = 0.0
 
+            # Split PIT AdjOE/AdjDE
+            for stat in ["adj_offensive_efficiency", "adj_defensive_efficiency"]:
+                h_val = _get_team_pit_feature(conn, hid, date_str, stat)
+                a_val = _get_team_pit_feature(conn, aid, date_str, stat)
+                if h_val is not None and a_val is not None:
+                    row[f"diff_pit_{stat}"] = h_val - a_val
+                else:
+                    row[f"diff_pit_{stat}"] = 0.0
+
             # Average tempo (combined pace of both teams)
             h_tempo = conn.execute(
                 "SELECT stat_value FROM team_stats "
@@ -163,6 +172,8 @@ def build_training_data(sport: str, seasons: list = None):
                                     + a_tempo["stat_value"]) / 2.0
             else:
                 row["avg_tempo"] = 0.0
+
+            row["is_postseason"] = game["postseason"]
 
             counts["used"] += 1
             date_counts[game["date"]] += 1
@@ -365,11 +376,16 @@ def train_model(sport: str, seasons: list = None):
         Returns (ats_model, feature_columns) or (None, None).
         """
         conn = get_db(sport)
-        ats_pit_stats = ARCHIVE_STATS + ["consensus_rank"]
+        ats_pit_stats = [
+            "adj_offensive_efficiency",
+            "adj_defensive_efficiency",
+            "adj_tempo",
+            "consensus_rank",
+        ]
 
         games_with_odds = conn.execute("""
             SELECT home_team_id, away_team_id, home_score, away_score,
-                   neutral_site, date, vegas_spread, season
+                   neutral_site, date, vegas_spread, season, postseason
             FROM games
             WHERE vegas_spread IS NOT NULL AND home_score IS NOT NULL
                   AND season >= 2010
@@ -425,6 +441,7 @@ def train_model(sport: str, seasons: list = None):
 
             row["neutral_site"] = game["neutral_site"]
             row["vegas_spread"] = spread
+            row["is_postseason"] = game["postseason"]
 
             ats_season_counts[season]["used"] += 1
             ats_date_counts[date_str] += 1
@@ -601,7 +618,8 @@ def train_model(sport: str, seasons: list = None):
 
 def predict_game(sport: str, home_team: str, away_team: str,
                  season: int, neutral_site: bool = False,
-                 vegas_spread: float = None) -> dict:
+                 vegas_spread: float = None,
+                 postseason: bool = False) -> dict:
     """Predict the outcome of a game.
 
     Returns dict with win probabilities, predicted winner, predicted margin,
@@ -675,6 +693,15 @@ def predict_game(sport: str, home_team: str, away_team: str,
         else:
             row[f"diff_{col_name}"] = 0.0
 
+    # Split PIT AdjOE/AdjDE
+    for stat in ["adj_offensive_efficiency", "adj_defensive_efficiency"]:
+        h_val = _get_team_pit_feature(conn, home_id, today_str, stat)
+        a_val = _get_team_pit_feature(conn, away_id, today_str, stat)
+        if h_val is not None and a_val is not None:
+            row[f"diff_pit_{stat}"] = h_val - a_val
+        else:
+            row[f"diff_pit_{stat}"] = 0.0
+
     # Average tempo
     h_tempo = conn.execute(
         "SELECT stat_value FROM team_stats "
@@ -691,6 +718,8 @@ def predict_game(sport: str, home_team: str, away_team: str,
                             + a_tempo["stat_value"]) / 2.0
     else:
         row["avg_tempo"] = 0.0
+
+    row["is_postseason"] = int(postseason)
 
     conn.close()
 
@@ -747,7 +776,12 @@ def predict_game(sport: str, home_team: str, away_team: str,
     ats_vegas = -vegas_spread if vegas_spread is not None else None
     if ats_vegas is not None and ats_model is not None:
         conn2 = get_db(sport)
-        ats_pit_stats = ARCHIVE_STATS + ["consensus_rank"]
+        ats_pit_stats = [
+            "adj_offensive_efficiency",
+            "adj_defensive_efficiency",
+            "adj_tempo",
+            "consensus_rank",
+        ]
         ats_row = {}
         ats_ok = True
         for stat in ats_pit_stats:
@@ -768,6 +802,7 @@ def predict_game(sport: str, home_team: str, away_team: str,
                                     if h_tempo and a_tempo else 0.0)
             ats_row["neutral_site"] = int(neutral_site)
             ats_row["vegas_spread"] = ats_vegas
+            ats_row["is_postseason"] = int(postseason)
 
             X_ats = pd.DataFrame([ats_row])[ats_feature_columns]
 
