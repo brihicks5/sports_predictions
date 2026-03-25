@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sports_predictions.model import predict_game
 from sports_predictions.odds import fetch_slate
+from sports_predictions.parlays import find_parlay_candidates, format_parlays
 
 
 def spread_str(margin, home_name, away_name):
@@ -366,6 +367,14 @@ def main():
             "score": score_str,
             "winner_result": winner_result,
             "ats_result": ats_result,
+            # Internal fields for parlay engine
+            "_win_prob": win_prob,
+            "_vegas_spread": vegas_spread,
+            "_ats_cover": ats_cover,
+            "_home": home,
+            "_away": away,
+            "_home_ml": game.get("home_moneyline"),
+            "_away_ml": game.get("away_moneyline"),
         })
 
     if not results:
@@ -391,6 +400,12 @@ def main():
         print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)))
     print()
 
+    # Parlay suggestions
+    parlays = find_parlay_candidates(results, postseason=args.postseason)
+    parlay_text = format_parlays(parlays)
+    if parlay_text:
+        print(parlay_text)
+
     # Save to file
     slates_dir = Path(__file__).resolve().parent.parent / "data" / "slates"
     slates_dir.mkdir(exist_ok=True)
@@ -401,6 +416,8 @@ def main():
         for row in rows:
             f.write("  ".join(cell.ljust(widths[i])
                               for i, cell in enumerate(row)) + "\n")
+        if parlay_text:
+            f.write(parlay_text)
     print(f"Saved to {out_path}")
 
 
