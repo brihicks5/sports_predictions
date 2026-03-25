@@ -55,6 +55,8 @@ python scripts/predict_slate.py --date 2026-03-14 --results-only  # fill in scor
 
 Results are saved to `data/slates/YYYY-MM-DD.txt`. Use `--results-only` to update an existing slate with final scores without re-running predictions.
 
+The slate includes parlay suggestions (ML, ATS, and mixed) with expected value calculations. Use `--postseason` for tournament games (disables ATS parlay legs due to low tournament ATS accuracy).
+
 ### 6. Simulate the NCAA Tournament
 
 After Selection Sunday, fetch the bracket from ESPN and run simulations:
@@ -164,6 +166,7 @@ sports_predictions/
 │   ├── db.py                 # Generic SQLite schema (works for any sport)
 │   ├── model.py              # MLP margin + total regressors
 │   ├── odds.py               # ESPN pickcenter odds fetcher
+│   ├── parlays.py            # Parlay suggestion engine + fair odds calculator
 │   └── scrapers/
 │       └── ncaa_basketball.py  # Kaggle, KenPom, ESPN importers
 ├── scripts/
