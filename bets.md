@@ -106,3 +106,37 @@
 ---
 
 **Running Total: 16-14, +$33.94**
+
+## 2026-03-26
+
+| Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
+|------|-------------|-------------|-----|------|--------|--------|-----|
+| Arkansas vs Arizona (N) | Arizona -12.3 | Arizona -7.5 | Arizona -7.5 | -112 | $5.00 | WIN (88-109 Arizona) | +$4.46 |
+
+**Daily: 1-0, +$4.46**
+
+---
+
+**Running Total: 17-14, +$38.40**
+
+## 2026-03-27
+
+| Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
+|------|-------------|-------------|-----|------|--------|--------|-----|
+| Alabama vs Michigan (N) | Michigan -6.1 | Michigan -9.5 | Michigan -8.5 | -118 | $5.00 | WIN (77-90 Michigan) | +$4.24 |
+| Parlay: Arizona ML / Michigan St ML | Ariz -12.3 / MSU +1.0 | | Parlay ML | +168 | $5.00 | LOSS (MSU lost 63-67) | -$5.00 |
+| Parlay: Purdue ML / Tennessee ML | Purdue -4.6 / Tenn -1.1 | | Parlay ML | +232 | $5.00 | WIN (both hit) | +$11.60 |
+
+**Daily: 2-1, +$10.84**
+
+---
+
+**Running Total: 19-15, +$49.24**
+
+## 2026-03-29
+
+| Game | Model Spread | Vegas Spread | Bet | Odds | Amount | Result | P/L |
+|------|-------------|-------------|-----|------|--------|--------|-----|
+| Tennessee vs Michigan (N) | Michigan -8.0 | Michigan -7.5 | Michigan -5.5 | -122 | $10.00 | | |
+| Parlay: Michigan ML / Arizona ML / Duke ML | Mich -8.0 / Ariz -9.7 / Duke -4.9 | | Parlay ML | +164 | $5.00 | | |
+| Parlay: Illinois -3.5 / Arizona -2.5 / Duke -3.5 / Michigan -4.5 | ILL -3.3 / Ariz -9.7 / Duke -4.9 / Mich -8.0 | | Parlay ATS | +539 | $10.00 | | |
